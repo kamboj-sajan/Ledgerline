@@ -116,6 +116,16 @@ see random kills and every failpoint fire. Then:
 | Velocity is per card across all merchants | Code: `payments.RecentByCard` | `TestFraudVelocityAcrossMerchants` |
 | The evaluation tunes on the earlier split only, and the API and the harness run the same rule code | `internal/fraud/eval` | `TestSweepChoosesOnTuneOnly`, `TestLoadSparkovUsesTrainHistoryForTest`; report in [fraud-eval.md](fraud-eval.md) |
 
+## Reconciliation
+
+| Invariant | Enforced by | Proven by |
+|-----------|-------------|-----------|
+| Every injected bank fault is found with the right class, and nothing else is reported (no false positives) | Code: `recon.Reconcile` | `TestReconcileMatchesManifestAcrossSeeds` (2,000 seeds, 45,217 faults), `TestReconcileAgainstLedger` (5 seeds on Postgres) |
+| Classification does not depend on row order; window boundaries are exact | Code | `TestPropReconcileIndependentOfRowOrder`, `TestReconcileWindow` |
+| Only matched and late rows post; the ledger moves by exactly their amounts and fees | Code: `recon.Post` | `TestReconcileAgainstLedger` (bank_cash and network_fee_expense checked) |
+| Running reconciliation again never posts twice | DB: `UNIQUE (external_ref)` on `settlement:<reference>` | `TestReconcileAgainstLedger` (second run posts 0), `TestLedgerPostMapsSchemaRulesToErrors` |
+| Settlement files are parsed exactly (no floats) and malformed rows are rejected with their line | Code: `money.ParseMajor`, `recon.ReadCSV` | `TestReadCSVRejectsBadRows` |
+
 ## Schema
 
 | Invariant | Enforced by | Proven by |
@@ -141,8 +151,9 @@ or in a scratch copy of the repo.
 | `FOR UPDATE SKIP LOCKED` removed from the dispatcher's claim | `TestDispatchManyDispatchersNoDoubleSend` in 3/3 runs (events sent 2–3 times) |
 | Authorize uses a fresh acquirer key per attempt (end to end) | `TestChaos`: 29 payments authorized more than once, 3 where the acquirer and our records disagree |
 | Receiver without dedupe | `TestChaos`: 1,158 events processed for 877 unique ids |
+| Reconciler treats late rows as on time | `TestReconcileMatchesManifestAcrossSeeds`, on seed 1 |
 | `FOR UPDATE` removed from `GetForUpdate` | `TestConcurrencyOverRefund` in 3/3 runs (23,425 refunded of 10,000; the CHECK constraint did not catch it), `TestConcurrencyCaptureDifferentKeys` in 2/3 |
 
 ## Still to come
 
-Reconciliation (M5).
+Load tests and benchmarks (M6).

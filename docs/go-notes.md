@@ -256,3 +256,13 @@ erasure to think about for most uses. `eval.Sweep(tune, test, candidates, firesA
 own config and calls `fraud.Config.Fires`, so one sweep routine serves every rule.
 `flag := func(e Example) bool { return firesAt(th, e) }` captures the loop variable `th`. Since
 Go 1.22 that is safe, because each iteration gets its own copy.
+
+## `encoding/csv` and `io.Reader`
+
+`csv.NewReader(r)` takes any `io.Reader`: a file, a `bytes.Buffer`, an HTTP body. `io.Reader`
+is a one-method interface (`Read(p []byte) (int, error)`), like an input stream but far
+smaller. That's why the reconciliation tests can write a settlement file into a
+`bytes.Buffer` and parse it back with the same `ReadCSV` that reads files from disk.
+`FieldsPerRecord` makes the reader reject rows with the wrong number of columns.
+`ReuseRecord` reuses one slice per row to avoid an allocation per line (so don't keep the slice
+after the next `Read`).
