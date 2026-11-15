@@ -271,7 +271,7 @@ func Capture(paymentID, merchantID string, amount, fee money.Money) (Tx, error) 
 }
 
 // Refund returns money to the cardholder out of what we owe the merchant.
-// Our fee is not refunded (see docs/adr/0005-fees-on-refunds.md), so a full
+// Our fee is not refunded (see docs/adr/0002-fees-on-refunds.md), so a full
 // refund leaves the merchant's balance negative by the fee.
 //
 //	debit  merchant_payable      amount

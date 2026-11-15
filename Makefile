@@ -34,10 +34,10 @@ db-up: ## Start Postgres in Docker Compose and wait until it is healthy
 db-down: ## Stop Compose services (keeps the data volume)
 	docker compose down
 
-migrate: ## Apply migrations to $$DATABASE_URL
+migrate: ## Apply migrations to $DATABASE_URL
 	$(GO) run ./cmd/ledgerline migrate up
 
-audit: ## Check ledger invariants in $$DATABASE_URL (global sum 0 per currency, every transaction balances)
+audit: ## Check ledger invariants in $DATABASE_URL (global sum 0 per currency, every transaction balances)
 	$(GO) run ./cmd/ledgerline audit
 
 # prop-long: the stateful ledger property test with enough generated cases

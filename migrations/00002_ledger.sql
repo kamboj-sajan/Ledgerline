@@ -2,7 +2,7 @@
 
 -- Double-entry ledger. Amounts are signed BIGINT minor units: a debit is
 -- positive and a credit is negative, so "balanced" means SUM(amount) = 0 per
--- currency. See docs/adr/0002-signed-amounts.md.
+-- currency. See docs/adr/0001-signed-amounts.md.
 --
 -- The database enforces the ledger's invariants on its own, independently of
 -- the Go code:
