@@ -1,0 +1,2 @@
+,trans_date_trans_time,cc_num,merchant,category,amt,first,last,gender,street,city,state,zip,lat,long,city_pop,job,dob,trans_num,unix_time,merch_lat,merch_long,is_fraud
+0,2019-01-01 00:30:00,111,m1,misc,20.00,A,B,F,s,c,NC,1,36.0,-81.0,100,j,1988-03-09,t4,1325377800,36.0,-81.0,1

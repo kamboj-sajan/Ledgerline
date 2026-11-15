@@ -1,0 +1,4 @@
+,trans_date_trans_time,cc_num,merchant,category,amt,first,last,gender,street,city,state,zip,lat,long,city_pop,job,dob,trans_num,unix_time,merch_lat,merch_long,is_fraud
+0,2019-01-01 00:00:18,111,m1,misc,4.97,A,B,F,s,c,NC,1,36.0,-81.0,100,j,1988-03-09,t1,1325376018,36.0,-81.0,0
+1,2019-01-01 00:10:00,111,m2,misc,10.00,A,B,F,s,c,NC,1,36.0,-81.0,100,j,1988-03-09,t2,1325376600,36.5,-81.0,0
+2,2019-01-01 00:20:00,222,m3,misc,900.10,C,D,M,s,c,NY,2,40.0,-74.0,100,j,1970-01-01,t3,1325377200,41.0,-74.0,1
