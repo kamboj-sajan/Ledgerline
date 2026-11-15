@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kamboj-sajan/ledgerline/internal/acquirer"
+	"github.com/kamboj-sajan/ledgerline/internal/failpoint"
 	"github.com/kamboj-sajan/ledgerline/internal/idempotency"
 	"github.com/kamboj-sajan/ledgerline/internal/merchants"
 )
@@ -71,6 +72,11 @@ func (s *Server) Handler() http.Handler {
 		{"POST", "/v1/payments/{id}/void", s.void},
 		{"GET", "/v1/payments/{id}/ledger", s.paymentLedger},
 		{"GET", "/v1/accounts/{id}/balance", s.balance},
+		{"POST", "/v1/webhook_endpoints", s.createWebhookEndpoint},
+		{"POST", "/v1/webhook_endpoints/{id}/rotate_secret", s.rotateWebhookSecret},
+		{"GET", "/v1/events", s.listEvents},
+		{"GET", "/v1/events/{id}", s.getEvent},
+		{"POST", "/v1/events/{id}/redeliver", s.redeliverEvent},
 	}
 	allowed := map[string][]string{}
 	for _, rt := range routes {
@@ -227,6 +233,7 @@ func (s *Server) runIdempotent(w http.ResponseWriter, r *http.Request, m merchan
 		s.internalError(w, r, err)
 		return
 	}
+	failpoint.Inject("api-after-commit")
 	writeStored(w, resp)
 }
 

@@ -211,6 +211,7 @@ func (s *Server) saveAndWrite(ctx context.Context, w http.ResponseWriter, r *htt
 		s.internalError(w, r, err)
 		return
 	}
+	failpoint.Inject("api-after-commit")
 	writeStored(w, resp)
 }
 

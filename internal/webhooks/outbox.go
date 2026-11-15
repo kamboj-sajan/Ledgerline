@@ -1,7 +1,12 @@
-// Package webhooks delivers payment events to merchants. Events are written
-// to an outbox table in the same database transaction as the state change
-// they describe, so an event exists exactly when its change committed. A
-// separate dispatcher (M3) delivers them.
+// Package webhooks delivers payment events to merchants.
+//
+// Events are written to an outbox table in the same database transaction as
+// the state change they describe, together with one delivery row per enabled
+// endpoint, so an event and its deliveries exist exactly when the change
+// committed (docs/adr/0005-outbox.md). The Dispatcher sends due deliveries,
+// signed with HMAC-SHA256, and retries with capped exponential backoff and
+// full jitter. Delivery is at-least-once and unordered; receivers dedupe on
+// the event id.
 package webhooks
 
 import (
@@ -34,8 +39,8 @@ type Event struct {
 	CreatedAt  time.Time
 }
 
-// Insert writes an event in tx. It takes a pgx.Tx so the event can only be
-// written together with the change it describes.
+// Insert writes an event and its delivery rows in tx. It takes a pgx.Tx so
+// an event can only be written together with the change it describes.
 func Insert(ctx context.Context, tx pgx.Tx, merchantID, eventType, paymentID string, data any) (Event, error) {
 	raw, err := json.Marshal(data)
 	if err != nil {
@@ -52,5 +57,25 @@ func Insert(ctx context.Context, tx pgx.Tx, merchantID, eventType, paymentID str
 	if err != nil {
 		return Event{}, fmt.Errorf("webhooks: inserting event: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO webhook_deliveries (event_id, endpoint_id)
+		SELECT $1, id FROM webhook_endpoints WHERE merchant_id = $2 AND enabled`, e.ID, merchantID); err != nil {
+		return Event{}, fmt.Errorf("webhooks: queueing deliveries: %w", err)
+	}
 	return e, nil
+}
+
+// payload is the JSON body sent to endpoints.
+type payload struct {
+	ID        string          `json:"id"`
+	Object    string          `json:"object"`
+	Type      string          `json:"type"`
+	CreatedAt time.Time       `json:"created_at"`
+	Data      json.RawMessage `json:"data"`
+}
+
+// Payload renders the body delivered for an event. It is deterministic, so
+// every redelivery sends the same bytes.
+func Payload(e Event) ([]byte, error) {
+	return json.Marshal(payload{ID: e.ID, Object: "event", Type: e.Type, CreatedAt: e.CreatedAt.UTC(), Data: e.Data})
 }
