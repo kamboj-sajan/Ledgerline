@@ -2,7 +2,7 @@ GO ?= go
 DATABASE_URL ?= postgres://ledgerline:ledgerline@localhost:5432/ledgerline?sslmode=disable
 export DATABASE_URL
 
-.PHONY: help build test test-integration prop-long chaos load audit lint fmt vet db-up db-down migrate
+.PHONY: help build test test-integration test-concurrency prop-long chaos load audit lint fmt vet db-up db-down migrate
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -15,6 +15,11 @@ test: ## Unit tests with the race detector (no Docker needed)
 
 test-integration: ## Integration tests against a real Postgres (testcontainers; needs Docker)
 	$(GO) test -race -count=1 -tags=integration ./test/integration/...
+
+CONCURRENCY_COUNT ?= 25
+test-concurrency: ## Concurrency acceptance tests, $(CONCURRENCY_COUNT) runs each with -race (needs Docker)
+	$(GO) test -race -count=$(CONCURRENCY_COUNT) -tags=integration -run 'TestConcurrency' -v ./test/integration/ \
+		| grep -E '^(--- |ok|FAIL|PASS)' | sed -E 's/ \([0-9.]+s\)//' | sort | uniq -c
 
 lint: ## go vet (all build tags) + golangci-lint
 	$(GO) vet ./...
