@@ -64,6 +64,7 @@ Docker (`make test-integration`).
 | Capture/refund/void/create: key, state change, ledger entries, outbox event and stored response commit in one transaction | Code: `runIdempotent` | `TestAPIPaymentLifecycle` (event count), concurrency tests (exactly one journal transaction and one event), audits |
 | A retried authorization never authorizes twice at the acquirer | Code: our payment ID is the acquirer's idempotency key | `TestAuthorizeTimeoutThenRetry`, `TestAuthorizeCrashAfterAcquirerApproved`, `TestAuthorizeConcurrentDifferentKeys`, `TestAcquirerConcurrentCallsWithOneKeyAuthorizeOnce` |
 | A request whose lock went stale and was taken over cannot record a second outcome | Code: fencing `lock_token` checked by `Claim` | `TestIdempotencyMultiPhase`, `TestAuthorizeStaleLockTakeover` |
+| Concurrent replays of a finished key all get the stored response; `in_use` only while the first request runs | Code: lock-free `idempotency.Peek` before the advisory lock | `TestConcurrencyReplaysOfFinishedKey` (100 concurrent replays; 25 runs in `make test-concurrency`) |
 | Keys expire after 24 h | DB: `expires_at`; code: `Lookup` forgets, `Purge` deletes | `TestIdempotencyStoreExpiry`, `TestAPIIdempotency/an expired key…` |
 
 ## Concurrency (acceptance tests, `make test-concurrency`: 25 runs each under `-race`)
@@ -151,9 +152,12 @@ or in a scratch copy of the repo.
 | `FOR UPDATE SKIP LOCKED` removed from the dispatcher's claim | `TestDispatchManyDispatchersNoDoubleSend` in 3/3 runs (events sent 2–3 times) |
 | Authorize uses a fresh acquirer key per attempt (end to end) | `TestChaos`: 29 payments authorized more than once, 3 where the acquirer and our records disagree |
 | Receiver without dedupe | `TestChaos`: 1,158 events processed for 877 unique ids |
+| *Not injected: a real bug found by the k6 replay scenario.* Replays took the advisory lock before reading the stored response | `TestConcurrencyReplaysOfFinishedKey` failed 3/3 before the fix (`b963ae4`); k6 showed 0.05–1.1% errors on replays, 0% after |
 | Reconciler treats late rows as on time | `TestReconcileMatchesManifestAcrossSeeds`, on seed 1 |
 | `FOR UPDATE` removed from `GetForUpdate` | `TestConcurrencyOverRefund` in 3/3 runs (23,425 refunded of 10,000; the CHECK constraint did not catch it), `TestConcurrencyCaptureDifferentKeys` in 2/3 |
 
-## Still to come
+## Under load
 
-Load tests and benchmarks (M6).
+[benchmarks.md](benchmarks.md) runs the three k6 scenarios past their breaking points. Every run
+reports 0% errors on the flow and hot-payment scenarios at every rate, and no over-refund on the
+hot payment.
