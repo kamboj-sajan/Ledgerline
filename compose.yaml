@@ -34,7 +34,9 @@ services:
     build: .
     command: ["serve", "-addr", ":8080"]
     environment:
-      DATABASE_URL: postgres://ledgerline:ledgerline@postgres:5432/ledgerline?sslmode=disable
+      # pgx pool size; 8 matches pgx's own default here (max(4, CPUs)).
+      # docs/benchmarks.md compares it with 32.
+      DATABASE_URL: postgres://ledgerline:ledgerline@postgres:5432/ledgerline?sslmode=disable&pool_max_conns=${LEDGERLINE_POOL_MAX_CONNS:-8}
     ports:
       - "${LEDGERLINE_API_PORT:-8080}:8080"
     depends_on:

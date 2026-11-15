@@ -62,9 +62,15 @@ CHAOS_COUNT ?= 1
 chaos: ## Crash test: serve/dispatch/receiver as child processes, SIGKILLed at failpoints and at random (needs Docker)
 	$(GO) test -tags chaos -count=$(CHAOS_COUNT) -timeout 30m -run TestChaos -v ./test/chaos/ | grep -E '^(=== RUN|--- |\s+chaos_test|ok|FAIL|PASS)'
 
-# The targets below belong to later milestones. Until then they fail loudly
-# instead of passing with nothing to run.
+FLOW_RATES ?= 50 100 200 300 400
+REPLAY_RATES ?= 250 500 1000 2000
+HOT_RATES ?= 25 50 100 200
+load: ## k6: full flow, idempotent replays, one hot payment, each stepped through rising rates (needs Docker, k6)
+	docker compose up -d --build --wait serve
+	@echo "| scenario | target it/s | achieved it/s | endpoint | req/s | p50 ms | p95 ms | p99 ms | max ms | errors | dropped |"
+	@echo "|---|---|---|---|---|---|---|---|---|---|---|"
+	@loadtest/run.sh flow $(FLOW_RATES)
+	@loadtest/run.sh replay $(REPLAY_RATES)
+	@loadtest/run.sh hot $(HOT_RATES)
 
 
-load: ## k6 load test scenarios (M6)
-	@echo "load: not implemented yet (lands in M6, load tests)" >&2; exit 1
