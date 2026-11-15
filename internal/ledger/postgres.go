@@ -24,9 +24,11 @@ type Account struct {
 }
 
 // StoredTx is a journal transaction as read back from the database.
+// AccountIDs[i] is the database ID of Postings[i]'s account.
 type StoredTx struct {
-	ID        string
-	CreatedAt time.Time
+	ID         string
+	CreatedAt  time.Time
+	AccountIDs []string
 	Tx
 }
 
@@ -213,7 +215,7 @@ func PaymentTransactions(ctx context.Context, db DB, paymentID string) ([]Stored
 func loadTransactions(ctx context.Context, db DB, where string, arg any) ([]StoredTx, error) {
 	rows, err := db.Query(ctx, `
 		SELECT jt.id, jt.kind, jt.payment_id, jt.external_ref, jt.reverses_id, jt.created_at,
-		       a.merchant_id, a.code, a.currency, e.amount
+		       a.id, a.merchant_id, a.code, a.currency, e.amount
 		FROM journal_transactions jt
 		JOIN entries e  ON e.transaction_id = jt.id
 		JOIN accounts a ON a.id = e.account_id
@@ -230,10 +232,10 @@ func loadTransactions(ctx context.Context, db DB, where string, arg any) ([]Stor
 			jtID, kind                       string
 			paymentID, extRef, reverses, mID *string
 			createdAt                        time.Time
-			code, currency                   string
+			acctID, code, currency           string
 			amount                           int64
 		)
-		if err := rows.Scan(&jtID, &kind, &paymentID, &extRef, &reverses, &createdAt, &mID, &code, &currency, &amount); err != nil {
+		if err := rows.Scan(&jtID, &kind, &paymentID, &extRef, &reverses, &createdAt, &acctID, &mID, &code, &currency, &amount); err != nil {
 			return nil, fmt.Errorf("ledger: scanning transaction: %w", err)
 		}
 		if len(out) == 0 || out[len(out)-1].ID != jtID {
@@ -247,6 +249,7 @@ func loadTransactions(ctx context.Context, db DB, where string, arg any) ([]Stor
 		}
 		cur := &out[len(out)-1]
 		cur.Postings = append(cur.Postings, Posting{Account: key, Amount: money.New(amount, key.Currency)})
+		cur.AccountIDs = append(cur.AccountIDs, acctID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("ledger: reading transactions: %w", err)

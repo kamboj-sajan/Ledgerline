@@ -2,26 +2,35 @@
 //
 // Usage:
 //
-//	ledgerline migrate [-database-url URL] [up|down|status]
-//	ledgerline audit   [-database-url URL]
+//	ledgerline serve   [flags]                 run the HTTP API
+//	ledgerline merchant create -name NAME      create a merchant and print its API key
+//	ledgerline migrate [up|down|status]        manage schema migrations
+//	ledgerline audit                           check ledger and payment invariants
 //
 // The database URL defaults to $DATABASE_URL.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/kamboj-sajan/ledgerline/internal/acquirer"
+	"github.com/kamboj-sajan/ledgerline/internal/api"
+	"github.com/kamboj-sajan/ledgerline/internal/idempotency"
 	"github.com/kamboj-sajan/ledgerline/internal/ledger"
+	"github.com/kamboj-sajan/ledgerline/internal/merchants"
 	"github.com/kamboj-sajan/ledgerline/internal/payments"
 	"github.com/kamboj-sajan/ledgerline/internal/store"
 )
@@ -29,8 +38,10 @@ import (
 const usage = `usage: ledgerline <command> [flags]
 
 commands:
+  serve                      run the HTTP API (see 'ledgerline serve -h')
+  merchant create -name N    create a merchant; prints its ID and API key (shown once)
   migrate [up|down|status]   apply, roll back one, or list schema migrations
-  audit                      check ledger invariants; exits 1 if any fail
+  audit                      check ledger and payment invariants; exits 1 if any fail
 `
 
 func main() {
@@ -55,6 +66,13 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return runMigrate(ctx, args[1:], stdout)
 	case "audit":
 		return runAudit(ctx, args[1:], stdout)
+	case "serve":
+		return runServe(ctx, args[1:])
+	case "merchant":
+		if len(args) < 2 || args[1] != "create" {
+			return errors.New("usage: ledgerline merchant create -name NAME")
+		}
+		return runMerchantCreate(ctx, args[2:], stdout)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil
@@ -167,4 +185,119 @@ func parseWithDSN(fs *flag.FlagSet, args []string, dsn *string) error {
 		return fmt.Errorf("%s: set -database-url or $DATABASE_URL", fs.Name())
 	}
 	return nil
+}
+
+func runServe(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	dsn := databaseURLFlag(fs)
+	addr := fs.String("addr", envOr("LEDGERLINE_ADDR", ":8080"), "listen address")
+	logLevel := fs.String("log-level", "info", "debug, info, warn or error")
+	def := api.DefaultConfig()
+	lockTimeout := fs.Duration("authorize-lock-timeout", def.AuthorizeLockTimeout, "how long an authorize request may hold its key before a retry may take over")
+	callTimeout := fs.Duration("acquirer-call-timeout", def.AcquirerTimeout, "timeout for each acquirer call")
+	expiry := fs.Duration("authorization-expiry", 7*24*time.Hour, "uncaptured authorizations older than this are expired")
+	sweepEvery := fs.Duration("sweep-interval", time.Minute, "how often to expire authorizations and purge old idempotency keys")
+	var sim acquirer.Config
+	fs.DurationVar(&sim.Latency, "acquirer-latency", 50*time.Millisecond, "simulated acquirer base latency")
+	fs.DurationVar(&sim.Jitter, "acquirer-jitter", 50*time.Millisecond, "simulated acquirer extra random latency")
+	fs.Float64Var(&sim.DeclineRate, "acquirer-decline-rate", 0.05, "share of authorizations the simulated acquirer declines")
+	fs.Float64Var(&sim.TimeoutRate, "acquirer-timeout-rate", 0, "share of authorizations recorded and then timed out")
+	fs.Float64Var(&sim.ErrorRate, "acquirer-error-rate", 0, "share of calls refused before processing")
+	fs.Uint64Var(&sim.Seed, "acquirer-seed", 0, "simulator random seed (0 = random)")
+	if err := parseWithDSN(fs, args, dsn); err != nil {
+		return err
+	}
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
+		return fmt.Errorf("serve: -log-level: %w", err)
+	}
+	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+
+	pool, err := store.Open(ctx, *dsn)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	srv := api.New(pool, acquirer.NewSimulator(pool, sim),
+		api.Config{AuthorizeLockTimeout: *lockTimeout, AcquirerTimeout: *callTimeout}, log)
+
+	go sweep(ctx, log, srv, pool, *expiry, *sweepEvery)
+
+	httpSrv := &http.Server{
+		Addr:              *addr,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- httpSrv.ListenAndServe() }()
+	log.Info("listening", "addr", *addr)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+	}
+	log.Info("shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	return httpSrv.Shutdown(shutdownCtx)
+}
+
+// sweep periodically expires stale authorizations and purges expired
+// idempotency keys until ctx is cancelled.
+func sweep(ctx context.Context, log *slog.Logger, srv *api.Server, pool store.DB, expiry, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if n, err := srv.ExpireAuthorizations(ctx, expiry, 100); err != nil {
+			log.Error("expiring authorizations", "error", err)
+		} else if n > 0 {
+			log.Info("expired authorizations", "count", n)
+		}
+		if n, err := idempotency.Purge(ctx, pool); err != nil {
+			log.Error("purging idempotency keys", "error", err)
+		} else if n > 0 {
+			log.Info("purged idempotency keys", "count", n)
+		}
+	}
+}
+
+func runMerchantCreate(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("merchant create", flag.ContinueOnError)
+	dsn := databaseURLFlag(fs)
+	name := fs.String("name", "", "merchant name")
+	if err := parseWithDSN(fs, args, dsn); err != nil {
+		return err
+	}
+	if *name == "" {
+		return errors.New("merchant create: -name is required")
+	}
+	pool, err := store.Open(ctx, *dsn)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	m, key, err := merchants.Create(ctx, pool, *name)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(map[string]any{"id": m.ID, "name": m.Name, "api_key": key,
+		"note": "the API key is shown only once; Ledgerline stores only its SHA-256 hash"})
+}
+
+func envOr(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return fallback
 }

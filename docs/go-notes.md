@@ -204,3 +204,29 @@ event and the from/to states. Its `Unwrap() error` method returns `ErrInvalidTra
 `errors.Is(err, payments.ErrInvalidTransition)` still matches, and
 `errors.As(err, &te)` gets the struct back (like `dynamic_cast` on a caught exception). The API
 uses `errors.Is` to pick the HTTP status and the struct's `Error()` text for the message.
+
+## `net/http` routing and handlers
+
+Since Go 1.22 the standard `http.ServeMux` matches method and path patterns:
+`mux.Handle("POST /v1/payments/{id}/capture", h)`, and the handler reads `r.PathValue("id")`. No
+router dependency is needed. When two patterns match, the more specific one wins, and a pattern
+with a method is more specific than the same path without one. Ledgerline uses that rule to
+register a method-less fallback per path that answers a JSON 405. A handler is anything with
+`ServeHTTP(w, r)`. `http.HandlerFunc(f)` turns a plain function into one; `acquirer.Func` uses
+the same trick for the acquirer interface. Middleware is a function that takes a handler and
+returns a wrapping handler (`s.authenticate(h)`, `s.recoverPanics(...)`).
+
+## `httptest` and `context.WithoutCancel`
+
+`httptest.NewServer(handler)` runs a real HTTP server on a random local port for tests. The API
+tests go through the full stack, real sockets included. `context.WithoutCancel(ctx)` keeps a
+context's values but drops its cancellation. Ledgerline uses it to release an idempotency key
+even when the client has already disconnected (which cancels `r.Context()`), because that
+cleanup must still happen.
+
+## Build tags for fault injection
+
+`internal/failpoint` has two files. `failpoint.go` (`//go:build !chaos`) defines an empty
+`Inject`, which the compiler inlines away, so a normal binary contains no fault-injection code
+at all. `failpoint_chaos.go` (`//go:build chaos`) defines the real one, which kills the process
+with SIGKILL. This is Go's equivalent of `#ifdef CHAOS` around a whole translation unit.
