@@ -84,6 +84,9 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, m merchants.M
 // authorizeBegin is phase 1. It returns done=true once it has written a
 // response (an error, a replay, or a stored rejection).
 func (s *Server) authorizeBegin(ctx context.Context, w http.ResponseWriter, r *http.Request, m merchants.Merchant, req idempotency.Request) (payments.Payment, string, bool) {
+	if s.replayed(w, r, req) {
+		return payments.Payment{}, "", true
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		s.internalError(w, r, err)

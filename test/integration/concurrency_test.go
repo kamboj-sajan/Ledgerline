@@ -180,3 +180,25 @@ func TestConcurrencyOverRefund(t *testing.T) {
 	t.Logf("%d of %d refunds succeeded, %d of %d refunded", succeeded, n, refunded, got.AmountCaptured)
 	e.mustAudit() // includes refunds-table and ledger agreement
 }
+
+// TestConcurrencyReplaysOfFinishedKey: once a key's response is stored, any
+// number of concurrent replays must all get it. "In use" is only for a
+// request that is still running. Found by the k6 replay scenario: before the
+// fix, replays took the key's advisory lock first, and about 40% of 200
+// concurrent replays of a finished key got 409 idempotency_key_in_use.
+func TestConcurrencyReplaysOfFinishedKey(t *testing.T) {
+	e := newAPIEnv(t)
+	key := newKey()
+	body := paymentBody("fp_ok", 1_000)
+	first := e.do("POST", "/v1/payments", key, body)
+	wantStatus(t, first, http.StatusCreated)
+
+	results := fire(100, func(int) response { return e.do("POST", "/v1/payments", key, body) })
+	for i, r := range results {
+		if r.Status != first.Status || !bytes.Equal(r.Body, first.Body) || r.Header.Get("Idempotent-Replayed") != "true" {
+			t.Fatalf("replay %d = %s, want the stored %s", i, r, first)
+		}
+	}
+	// A different request under the same key is still rejected on the fast path.
+	wantError(t, e.do("POST", "/v1/payments", key, paymentBody("fp_ok", 999)), 409, "idempotency_key_reused")
+}

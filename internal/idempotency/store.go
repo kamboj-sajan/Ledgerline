@@ -84,6 +84,40 @@ func Lock(ctx context.Context, tx pgx.Tx, r Request) error {
 	return nil
 }
 
+// Peek is the lock-free fast path for replays. It returns the stored
+// response if the key has a finished, unexpired record for this request,
+// ErrReused if the record is for a different request, and ok=false
+// otherwise (no record, still running, or expired). Callers then take the
+// lock and Lookup.
+//
+// It is safe without a lock because a finished record never changes. Save
+// writes 'finished' once, and the only later change is deletion after
+// expiry. Without this, concurrent replays of a finished key would all
+// queue on the key's advisory lock, and those that lost the try-lock would
+// wrongly get 409 idempotency_key_in_use. In use is meant only for a request
+// that is still running.
+func Peek(ctx context.Context, db store.DB, r Request) (resp Response, ok bool, err error) {
+	var (
+		hash   []byte
+		status int32
+		body   []byte
+	)
+	err = db.QueryRow(ctx, `
+		SELECT request_hash, response_status, response_body FROM idempotency_keys
+		WHERE merchant_id = $1 AND key = $2 AND recovery_point = 'finished' AND expires_at > now()`,
+		r.MerchantID, r.Key).Scan(&hash, &status, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Response{}, false, nil
+	}
+	if err != nil {
+		return Response{}, false, fmt.Errorf("idempotency: peeking key: %w", err)
+	}
+	if [32]byte(hash) != r.Hash {
+		return Response{}, false, ErrReused
+	}
+	return Response{Status: int(status), Body: body}, true, nil
+}
+
 // Lookup reads the key's record and locks its row until tx ends.
 //
 // An expired record is deleted and reported as StateNew. A record for a

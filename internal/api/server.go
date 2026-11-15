@@ -184,6 +184,9 @@ func (s *Server) runIdempotent(w http.ResponseWriter, r *http.Request, m merchan
 		return
 	}
 	ctx := r.Context()
+	if s.replayed(w, r, req) {
+		return
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		s.internalError(w, r, err)
@@ -239,6 +242,21 @@ func (s *Server) runIdempotent(w http.ResponseWriter, r *http.Request, m merchan
 	}
 	failpoint.Inject("api-after-commit")
 	writeStored(w, resp)
+}
+
+// replayed serves a stored response through the lock-free fast path, or
+// writes the reused-key error. It reports whether it wrote a response.
+func (s *Server) replayed(w http.ResponseWriter, r *http.Request, req idempotency.Request) bool {
+	resp, ok, err := idempotency.Peek(r.Context(), s.db, req)
+	switch {
+	case err != nil:
+		s.writeIdempotencyError(w, r, err)
+		return true
+	case ok:
+		writeReplay(w, resp)
+		return true
+	}
+	return false
 }
 
 // keyedRequest validates the Idempotency-Key header and fingerprints the request.
