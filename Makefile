@@ -40,11 +40,18 @@ migrate: ## Apply migrations to $$DATABASE_URL
 audit: ## Check ledger invariants in $$DATABASE_URL (global sum 0 per currency, every transaction balances)
 	$(GO) run ./cmd/ledgerline audit
 
+# prop-long: the stateful ledger property test with enough generated cases
+# for >= 1,000,000 operations. LEDGERLINE_PROP_MIN_OPS makes the test itself
+# fail if fewer ran, so the count is checked, not assumed. No -race here: it
+# would slow the run about 10x and the in-memory ledger is single-threaded.
+PROP_CHECKS ?= 10000
+PROP_STEPS ?= 150
+prop-long: ## >=1,000,000 generated ledger operations against the pure posting logic
+	LEDGERLINE_PROP_MIN_OPS=1000000 $(GO) test -count=1 -timeout=60m -run 'TestPropLedgerMemory$$' -v ./internal/ledger \
+		-args -rapid.checks=$(PROP_CHECKS) -rapid.steps=$(PROP_STEPS)
+
 # The targets below belong to later milestones. Until then they fail loudly
 # instead of passing with nothing to run.
-
-prop-long: ## >=1,000,000 generated operations against the pure posting logic (M1)
-	@echo "prop-long: not implemented yet (lands in M1, ledger)" >&2; exit 1
 
 chaos: ## Fault-injection tests with SIGKILL/restart and failpoints (M3)
 	@echo "chaos: not implemented yet (lands in M3, webhooks)" >&2; exit 1

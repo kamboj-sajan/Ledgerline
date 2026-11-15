@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"sync"
 	"sync/atomic"
-	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,6 +28,17 @@ import (
 const Image = "postgres:17-alpine"
 
 const templateDB = "ledgerline_template"
+
+// TB is the part of testing.TB that storetest needs. *testing.T and
+// *testing.B satisfy it, and so does *rapid.T, which lets a property test get
+// a fresh database for every generated case.
+type TB interface {
+	Helper()
+	Fatalf(format string, args ...any)
+	Errorf(format string, args ...any)
+	Cleanup(func())
+	Context() context.Context
+}
 
 // Postgres is a running container plus an admin connection used to create
 // and drop per-test databases.
@@ -107,31 +117,31 @@ func (p *Postgres) urlFor(db string) string {
 
 // NewDatabase creates a migrated database for the calling test and returns
 // its connection URL. The database is dropped when the test finishes.
-func (p *Postgres) NewDatabase(t testing.TB) string {
+func (p *Postgres) NewDatabase(t TB) string {
 	t.Helper()
 	return p.create(t, "TEMPLATE "+templateDB)
 }
 
 // NewEmptyDatabase creates a database with no migrations applied, for tests
 // of the migrations themselves.
-func (p *Postgres) NewEmptyDatabase(t testing.TB) string {
+func (p *Postgres) NewEmptyDatabase(t TB) string {
 	t.Helper()
 	return p.create(t, "")
 }
 
 // NewPool is NewDatabase plus a connection pool that is closed when the test
 // finishes.
-func (p *Postgres) NewPool(t testing.TB) *pgxpool.Pool {
+func (p *Postgres) NewPool(t TB) *pgxpool.Pool {
 	t.Helper()
 	pool, err := store.Open(t.Context(), p.NewDatabase(t))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("storetest: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	return pool
 }
 
-func (p *Postgres) create(t testing.TB, clause string) string {
+func (p *Postgres) create(t TB, clause string) string {
 	t.Helper()
 	name := fmt.Sprintf("test_%d", p.counter.Add(1))
 	ident := pgx.Identifier{name}.Sanitize()
