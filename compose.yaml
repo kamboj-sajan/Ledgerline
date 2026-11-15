@@ -1,0 +1,33 @@
+name: ledgerline
+
+services:
+  postgres:
+    image: postgres:17-alpine # keep in step with internal/store/storetest.Image
+    environment:
+      POSTGRES_USER: ledgerline
+      POSTGRES_PASSWORD: ledgerline
+      POSTGRES_DB: ledgerline
+    ports:
+      - "${LEDGERLINE_PG_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledgerline -d ledgerline"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: applies migrations, then exits. Later services depend on it
+  # completing successfully.
+  migrate:
+    build: .
+    command: ["migrate", "up"]
+    environment:
+      DATABASE_URL: postgres://ledgerline:ledgerline@postgres:5432/ledgerline?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  pgdata:

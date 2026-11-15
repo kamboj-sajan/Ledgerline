@@ -83,3 +83,52 @@ after 2 generated cases.
 ## `range` over an integer
 
 `for i := range len(s)` counts `0..len(s)-1` (Go 1.22+), the same as `for (int i = 0; i < n; ++i)`.
+
+## `context.Context`
+
+Every function that does I/O or might block takes a `ctx context.Context` as its first parameter.
+A context carries a cancellation signal and a deadline down the call stack. When it is cancelled
+(Ctrl-C, client disconnect, timeout), pgx aborts the query and `http.Client` aborts the request.
+C++ has no standard equivalent: the closest thing is passing a `std::stop_token` everywhere by
+hand. Contexts are passed explicitly, never stored in structs. `signal.NotifyContext` in
+`cmd/ledgerline/main.go` turns SIGINT/SIGTERM into cancellation. In tests, `t.Context()` is
+cancelled when the test ends.
+
+## `defer`
+
+`defer m.Close()` schedules a call for when the *surrounding function* returns, however it
+returns. It plays the role RAII destructors play in C++, but it is explicit and scoped to the
+function, not to a block. Deferred calls run last-in-first-out. One trap: `os.Exit` ends the
+process immediately and skips every deferred call. That is why `TestMain` calls a helper
+(`runTests`) that holds the defers and returns an exit code, then calls `os.Exit` with that code.
+
+## Blank imports for side effects
+
+`import _ "github.com/jackc/pgx/v5/stdlib"` imports a package only for its `init()` function,
+which registers the `"pgx"` driver with `database/sql`. This is like linking in a translation
+unit whose static initialiser registers a plugin. It is used once, in `internal/store/migrate.go`,
+because goose needs a `database/sql` handle. The application itself uses pgx's native pool.
+
+## `//go:embed`
+
+`//go:embed *.sql` above `var FS embed.FS` makes the compiler bake the matching files into the
+binary, like `#embed` in C23/C++26 or a generated resource file. The `ledgerline` binary can
+migrate a database without the `.sql` files on disk, and the Docker image ships only the binary.
+
+## Build tags
+
+A file that starts with `//go:build integration` is compiled only when you pass
+`-tags=integration`, similar to an `#ifdef` around the whole file. `go test ./...` therefore
+stays fast and needs no Docker, while `make test-integration` includes the Postgres tests.
+Later, the `chaos` tag will compile failpoints into the binary only for fault-injection tests.
+
+## `flag.FlagSet` for subcommands
+
+The standard `flag` package parses `-name value` flags. A `flag.NewFlagSet` per subcommand
+(`migrate`, later `serve`, `dispatch`) gives `git`-style CLIs without a dependency.
+
+## Concurrency primitives in the test harness
+
+`sync.Mutex` is `std::mutex`, but it is a value, not a handle (never copy one after first use;
+`go vet` checks this). `atomic.Int64` is `std::atomic<int64_t>`. A zero-value `sync.Mutex` is
+unlocked and ready to use, so it needs no constructor.
