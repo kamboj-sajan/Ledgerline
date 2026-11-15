@@ -167,3 +167,31 @@ Any comparable type can be a map key, including structs of comparable fields. So
 `std::unordered_map`, which needs a `std::hash` specialisation. Map iteration order is
 *deliberately randomised*, so code that needs determinism sorts the keys first (see
 `Memory.Accounts`).
+
+## Goroutines, `sync.WaitGroup` and closing a channel as a starting gun
+
+`go f()` starts `f` on a *goroutine*, a thread managed by the Go runtime and multiplexed onto a
+few OS threads. Goroutines are cheap enough (a few KB of stack) to start hundreds per test.
+`wg.Go(func(){...})` (Go 1.25+) starts a goroutine and tracks it, and `wg.Wait()` blocks until
+all of them return: a `std::latch` plus `std::jthread` in one. In
+`TestLedgerEnsureAccountConcurrent`, every goroutine first blocks on `<-start`, a receive from a
+channel. `close(start)` wakes *all* receivers at once, so the 50 workers hit Postgres together
+instead of trickling in. The loop variable `i` is captured per iteration (Go 1.22+ gives each
+iteration a fresh variable, which fixed the classic closure-captures-the-loop-variable bug).
+
+## Generics
+
+`func auditIDs[T any](...) (int64, []T, error)` is a generic function, like a function template
+with a constraint. `any` means no constraint. Generic code is type-checked once at definition,
+not per instantiation as C++ templates are, so there are no SFINAE-style surprises. The
+trade-off is that you can only use operations the constraint allows. Used in
+`internal/ledger/audit.go` to scan both text and bigint ID columns with one helper.
+
+## Interfaces at the consumer
+
+`ledger.DB` is a three-method interface declared in the package that *uses* it. `*pgxpool.Pool`,
+`*pgx.Conn` and `pgx.Tx` all satisfy it without knowing it exists, so `ledger.Balance` runs
+inside or outside a transaction. The Go habit is to declare small interfaces where they are
+consumed, not big ones where types are defined. A C++ base class has to be planned up front;
+a Go interface can be declared after the fact around types you don't own. `storetest.TB` does
+the same, so `*rapid.T` can be passed where tests normally pass `*testing.T`.

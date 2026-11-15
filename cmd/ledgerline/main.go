@@ -3,6 +3,7 @@
 // Usage:
 //
 //	ledgerline migrate [-database-url URL] [up|down|status]
+//	ledgerline audit   [-database-url URL]
 //
 // The database URL defaults to $DATABASE_URL.
 package main
@@ -18,6 +19,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/kamboj-sajan/ledgerline/internal/ledger"
 	"github.com/kamboj-sajan/ledgerline/internal/store"
 )
 
@@ -25,6 +29,7 @@ const usage = `usage: ledgerline <command> [flags]
 
 commands:
   migrate [up|down|status]   apply, roll back one, or list schema migrations
+  audit                      check ledger invariants; exits 1 if any fail
 `
 
 func main() {
@@ -47,6 +52,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	switch args[0] {
 	case "migrate":
 		return runMigrate(ctx, args[1:], stdout)
+	case "audit":
+		return runAudit(ctx, args[1:], stdout)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil
@@ -60,12 +67,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 // own failure without hiding an earlier error.
 func runMigrate(ctx context.Context, args []string, stdout io.Writer) (err error) {
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
-	dsn := fs.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL connection URL")
-	if err := fs.Parse(args); err != nil {
+	dsn := databaseURLFlag(fs)
+	if err := parseWithDSN(fs, args, dsn); err != nil {
 		return err
-	}
-	if *dsn == "" {
-		return errors.New("migrate: set -database-url or $DATABASE_URL")
 	}
 	action := "up"
 	if fs.NArg() > 0 {
@@ -107,4 +111,50 @@ func runMigrate(ctx context.Context, args []string, stdout io.Writer) (err error
 	default:
 		return fmt.Errorf("migrate: unknown action %q (want up, down or status)", action)
 	}
+}
+
+// runAudit checks the ledger invariants against stored rows. It reads in one
+// REPEATABLE READ, read-only transaction, so every check sees the same
+// snapshot even while the API is writing.
+func runAudit(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("audit", flag.ContinueOnError)
+	dsn := databaseURLFlag(fs)
+	if err := parseWithDSN(fs, args, dsn); err != nil {
+		return err
+	}
+	pool, err := store.Open(ctx, *dsn)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fmt.Errorf("audit: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // read-only: nothing to commit
+
+	report, err := ledger.Audit(ctx, tx)
+	if err != nil {
+		return err
+	}
+	report.Write(stdout)
+	if !report.OK() {
+		return errors.New("audit: ledger invariants violated")
+	}
+	return nil
+}
+
+func databaseURLFlag(fs *flag.FlagSet) *string {
+	return fs.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL connection URL (default $DATABASE_URL)")
+}
+
+func parseWithDSN(fs *flag.FlagSet, args []string, dsn *string) error {
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *dsn == "" {
+		return fmt.Errorf("%s: set -database-url or $DATABASE_URL", fs.Name())
+	}
+	return nil
 }

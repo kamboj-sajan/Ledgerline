@@ -37,14 +37,14 @@ db-down: ## Stop Compose services (keeps the data volume)
 migrate: ## Apply migrations to $$DATABASE_URL
 	$(GO) run ./cmd/ledgerline migrate up
 
+audit: ## Check ledger invariants in $$DATABASE_URL (global sum 0 per currency, every transaction balances)
+	$(GO) run ./cmd/ledgerline audit
+
 # The targets below belong to later milestones. Until then they fail loudly
 # instead of passing with nothing to run.
 
 prop-long: ## >=1,000,000 generated operations against the pure posting logic (M1)
 	@echo "prop-long: not implemented yet (lands in M1, ledger)" >&2; exit 1
-
-audit: ## Ledger audit SQL: global sum is 0 per currency, every transaction balances (M1)
-	@echo "audit: not implemented yet (lands in M1, ledger)" >&2; exit 1
 
 chaos: ## Fault-injection tests with SIGKILL/restart and failpoints (M3)
 	@echo "chaos: not implemented yet (lands in M3, webhooks)" >&2; exit 1
