@@ -1,5 +1,7 @@
 # Ledgerline
 
+[![CI](https://github.com/kamboj-sajan/Ledgerline/actions/workflows/ci.yml/badge.svg)](https://github.com/kamboj-sajan/Ledgerline/actions/workflows/ci.yml)
+
 A payments API and double-entry ledger in Go, built to show that money stays correct when
 things go wrong: concurrent requests on one payment, clients that retry, and processes killed
 mid-write. Amounts are integers in minor units everywhere. Postgres itself rejects unbalanced
@@ -8,6 +10,10 @@ Webhooks go out through a transactional outbox, and the books are reconciled aga
 settlement file. Each of those claims is backed by a test that fails when the guarantee breaks,
 and [docs/INVARIANTS.md](docs/INVARIANTS.md) lists the deliberately broken builds each key test
 was shown to catch.
+
+![Terminal demo: a payment is authorized and captured, a retry is replayed rather than charged twice, a second capture is refused, the ledger balances, the concurrency tests pass, and the chaos test SIGKILLs the services about 100 times and still passes](docs/demo.gif)
+
+*The demo above is a real recording of [`scripts/demo.sh`](scripts/demo.sh), played at 1.3× with idle waits trimmed to 2 s.*
 
 ## Quickstart
 
