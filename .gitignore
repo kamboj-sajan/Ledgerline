@@ -1,0 +1,17 @@
+# Build output
+/bin/
+*.test
+*.out
+coverage.*
+
+# Fraud datasets are downloaded by scripts/download-datasets.sh, never committed
+/data/
+
+# Load test raw output
+/loadtest/results/
+
+# Local environment
+.env
+.DS_Store
+.idea/
+.vscode/
