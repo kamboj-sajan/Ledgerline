@@ -1,0 +1,26 @@
+{
+  "history_window": "720h",
+  "velocity": {
+    "window": "1h",
+    "max_count": 5,
+    "max_amount": {"USD": 300000, "EUR": 300000, "GBP": 250000},
+    "action": "review"
+  },
+  "amount_absolute": {
+    "max": {"USD": 1000000, "EUR": 1000000, "GBP": 800000},
+    "action": "block"
+  },
+  "amount_relative": {
+    "max_multiple": 10,
+    "min_history": 5,
+    "action": "review"
+  },
+  "geo_country_mismatch": {
+    "enabled": true,
+    "action": "review"
+  },
+  "geo_distance": {
+    "max_km": 0,
+    "action": "review"
+  }
+}
