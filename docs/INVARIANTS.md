@@ -39,11 +39,48 @@ Docker (`make test-integration`).
 | The audit finds violations in stored data, not only rejected writes | `ledgerline audit` SQL | `TestAuditDetectsCorruptionThatBypassedTriggers` (damage written with triggers disabled) |
 | Documented postings match the code | Example test | `Example` in `internal/ledger/example_test.go` (the worked example in `docs/ledger.md`) |
 
+## Payments
+
+| Invariant | Enforced by | Proven by |
+|-----------|-------------|-----------|
+| Only the transitions in the event table are possible; anything else is `409 invalid_state_transition` and changes nothing | Code: event-keyed table in `internal/payments/state.go` | `TestTransitionTable` (all 25 (from, to) pairs), `TestEventTable` (all 35 (event, from) pairs), `TestOperationsFollowTheTable` (6 operations × 5 states), `TestAPIStateMachineEveryStateAndOperation` (4 HTTP operations × 5 states) |
+| refunded ≤ captured ≤ authorized ≤ amount, fee ≤ captured | DB: `payments_amounts` CHECK. Code: domain methods | `TestPaymentsSchemaChecks`, `TestCapture`, `TestRefunds`, `TestAPICaptureAndRefundLimits` |
+| Each status implies its amounts (e.g. `refunded` ⇒ refunded = captured > 0; `failed` ⇒ no capture and a failure code) | DB: `payments_status_amounts` CHECK | `TestPaymentsSchemaChecks` |
+| Every payment's status and amounts equal a reference model after every operation, including invalid ones | n/a (this is the check) | `TestPropPaymentsPure` (≥ 1,000,000 operations in `make prop-long`), `TestPropPaymentsAPI` (over HTTP on Postgres) |
+| The fee is basis points (half away from zero) + fixed, capped at the amount | Code: `Pricing.Fee` | `TestPricingFee`, and the property tests' independent fee formula |
+| The payments table agrees with the ledger: no orphan journal transactions; captured, fee and refunded amounts match the postings; refunds table sums to `refunded_amount`; no entries in another merchant's accounts | `payments.Audit`, run by `ledgerline audit` | `TestPaymentsAuditCrossChecksLedger`; run after every step of `TestPropPaymentsAPI` and at the end of every API and concurrency test |
+| One merchant cannot read or change another's payments or accounts | Code: every query is scoped by merchant ID | `TestAPIErrors`, `TestAPIPaymentLifecycle` (balance), property tests ("wrong merchant" ⇒ not found) |
+| Refunds are append-only | DB: triggers | `TestRefundsAreAppendOnly` |
+
+## Idempotency
+
+| Invariant | Enforced by | Proven by |
+|-----------|-------------|-----------|
+| Same key + same request ⇒ the stored status and body, byte for byte, without executing again | Code: stored response replayed; DB: `(merchant_id, key)` primary key | `TestAPIIdempotency/replay…`, `TestAuthorizeDeclineIsStoredAndReplayed` |
+| Same key + different request ⇒ `409 idempotency_key_reused`, nothing executes | Code: SHA-256 of method, path, canonical body | `TestAPIIdempotency/same key…`, `TestIdempotencyStoreFinishedRecord`, `TestFingerprint` |
+| Formatting does not change a request's identity; numbers are never rounded | Code: `Canonicalize` with `UseNumber` | `TestCanonicalize` |
+| Same key while the first request runs ⇒ `409 idempotency_key_in_use` with `Retry-After` | DB: advisory lock (single-transaction endpoints); `locked_at` on the key row (authorize) | `TestIdempotencyLockIsExclusiveAndReleasedWithTransaction`, `TestAuthorizeKeyInUseWhileRunning`, `TestConcurrencyCaptureSameKey` |
+| Requests rejected before execution (auth, validation, not found, in use) do not use up the key | Code: nothing is written before execution; the lock is transaction-scoped | `TestAPIIdempotency/requests rejected…`, `TestIdempotencyLockIsExclusiveAndReleasedWithTransaction` (rollback leaves no record) |
+| Capture/refund/void/create: key, state change, ledger entries, outbox event and stored response commit in one transaction | Code: `runIdempotent` | `TestAPIPaymentLifecycle` (event count), concurrency tests (exactly one journal transaction and one event), audits |
+| A retried authorization never authorizes twice at the acquirer | Code: our payment ID is the acquirer's idempotency key | `TestAuthorizeTimeoutThenRetry`, `TestAuthorizeCrashAfterAcquirerApproved`, `TestAuthorizeConcurrentDifferentKeys`, `TestAcquirerConcurrentCallsWithOneKeyAuthorizeOnce` |
+| A request whose lock went stale and was taken over cannot record a second outcome | Code: fencing `lock_token` checked by `Claim` | `TestIdempotencyMultiPhase`, `TestAuthorizeStaleLockTakeover` |
+| Keys expire after 24 h | DB: `expires_at`; code: `Lookup` forgets, `Purge` deletes | `TestIdempotencyStoreExpiry`, `TestAPIIdempotency/an expired key…` |
+
+## Concurrency (acceptance tests, `make test-concurrency`: 25 runs each under `-race`)
+
+| Invariant | Proven by |
+|-----------|-----------|
+| 100 captures with different keys ⇒ exactly 1 × 200, 99 × `409 invalid_state_transition`, one capture journal transaction, one event | `TestConcurrencyCaptureDifferentKeys` |
+| 100 identical requests with one key, retrying on `in_use` ⇒ all responses byte-identical, one capture | `TestConcurrencyCaptureSameKey` |
+| 50 parallel partial refunds totalling more than the capture ⇒ refunded total ≤ captured, and payment, refunds table and ledger agree | `TestConcurrencyOverRefund` |
+
+Mechanism: `SELECT … FOR UPDATE` on the payment row ([ADR 0003](adr/0003-locking.md)).
+
 ## Schema
 
 | Invariant | Enforced by | Proven by |
 |-----------|-------------|-----------|
-| Every migration can be fully rolled back and re-applied | Each file's Down section | `TestMigrationsUpDownUp` |
+| Every migration can be fully rolled back and re-applied, including the `acquirer` schema | Each file's Down section | `TestMigrationsUpDownUp` |
 
 ## Evidence that the tests can fail
 
@@ -58,9 +95,12 @@ or in a scratch copy of the repo.
 | Capture that credits the fee to the merchant (balanced, but wrong) | `TestPropLedgerMemory`, first case; shrunk to 8 EUR captured with an 8 EUR fee |
 | `ledger.Memory` without external-reference uniqueness | `TestPropLedgerMemory`, first case |
 | Schema without the balance triggers | `TestPropLedgerPostgres`, after 4 cases (a single-entry transaction was accepted) |
+| Fee without its fixed part | `TestPropPaymentsPure`, after 4 cases; shrunk to a 1-unit capture whose fee should be 1 |
+| Authorize sends the acquirer a fresh key per attempt instead of the payment ID | `TestAuthorizeTimeoutThenRetry` (2 authorizations at the network) |
+| `Claim` ignores the fencing token | `TestIdempotencyMultiPhase`. The HTTP-level takeover test does not catch it: there the new owner finishes first, so the old one simply replays. |
+| `FOR UPDATE` removed from `GetForUpdate` | `TestConcurrencyOverRefund` in 3/3 runs (23,425 refunded of 10,000; the CHECK constraint did not catch it), `TestConcurrencyCaptureDifferentKeys` in 2/3 |
 
 ## Still to come
 
-Payments: refunded ≤ captured ≤ authorized (DB CHECK), the state machine transition table,
-idempotency, concurrency acceptance tests (M2). Outbox and webhook delivery (M3). Fraud (M4).
+Outbox delivery and webhook signing, and crash tests with SIGKILL (M3). Fraud (M4).
 Reconciliation (M5).
