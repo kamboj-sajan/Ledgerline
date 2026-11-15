@@ -76,6 +76,35 @@ Docker (`make test-integration`).
 
 Mechanism: `SELECT … FOR UPDATE` on the payment row ([ADR 0003](adr/0003-locking.md)).
 
+## Webhooks and the outbox
+
+| Invariant | Enforced by | Proven by |
+|-----------|-------------|-----------|
+| Exactly one outbox event per committed state change, none on rollback or rejection | Code: `webhooks.Insert` takes the change's `pgx.Tx`; DB: events append-only | `TestOutboxEventOnlyWithCommit`, `TestWebhookEndpointsAndOutbox`, concurrency tests, `TestChaos` (per payment, after SIGKILLs) |
+| Deliveries are queued in the same transaction, for the endpoints that existed then | Code | `TestWebhookEndpointsAndOutbox` |
+| Signatures: tampered body, wrong secret, stale or future timestamp, re-dated timestamp are all rejected | Code: `webhooks.Verify` (`hmac.Equal`, signed timestamp, 5 min window) | `TestSignatureVerification`, `TestSignMatchesSpec` (against openssl), `TestReceiverRejectsAndDedupes` |
+| During rotation, receivers on the old or the new secret both accept | Code: one `v1` per active secret | `TestSignatureDuringRotation`, `TestDispatchSignsWithBothSecretsDuringRotation` |
+| Several dispatchers never send one delivery at the same time | DB: `FOR UPDATE SKIP LOCKED` claim plus lease | `TestDispatchManyDispatchersNoDoubleSend` (4 dispatchers, 120 events, each sent once) |
+| Every event is delivered at least once, through crashes | Lease expiry, attempts counted at claim | `TestDispatchExpiredLeaseResendsAndReceiverDedupes`, `TestChaos` |
+| The receiver processes each event id exactly once, across retries, replays and restarts | Receiver: dedupe file synced to disk before 200 | `TestReceiverRejectsAndDedupes`, `TestFileStoreDedupesAcrossRestarts`, `TestChaos` |
+| Failed attempts back off with full jitter, capped; dead after N attempts; redelivery resets the budget | Code: `webhooks.Backoff`, dispatcher | `TestBackoffCeilings`, `TestBackoffIsSpreadOverTheInterval`, `TestDispatchRetriesAfter500ThenSucceeds`, `TestDispatchReceiverTimeout`, `TestDispatchGivesUpThenRedelivers` |
+
+## Crash safety (`make chaos`)
+
+`TestChaos` runs serve, dispatch and receiver as child processes. It SIGKILLs them at three
+failpoints (after the acquirer call and before recording it, after a commit and before the
+response, after a webhook send and before marking it delivered) and at random every
+200–800 ms, while 8 clients run 200 payment flows and retry with the same keys. Each run must
+see random kills and every failpoint fire. Then:
+
+| Assertion | Result (3 consecutive runs) |
+|-----------|-----------------------------|
+| Ledger and payments-vs-ledger audits pass; one payment per flow, in the state its client saw | passed |
+| Exactly one outbox event per committed state change | passed |
+| Every event delivered at least once | passed |
+| Receiver processed each event id exactly once | passed; 225–330 duplicate deliveries deduped per run |
+| No payment authorized twice at the acquirer; acquirer and our records agree | passed |
+
 ## Schema
 
 | Invariant | Enforced by | Proven by |
@@ -98,9 +127,11 @@ or in a scratch copy of the repo.
 | Fee without its fixed part | `TestPropPaymentsPure`, after 4 cases; shrunk to a 1-unit capture whose fee should be 1 |
 | Authorize sends the acquirer a fresh key per attempt instead of the payment ID | `TestAuthorizeTimeoutThenRetry` (2 authorizations at the network) |
 | `Claim` ignores the fencing token | `TestIdempotencyMultiPhase`. The HTTP-level takeover test does not catch it: there the new owner finishes first, so the old one simply replays. |
+| `FOR UPDATE SKIP LOCKED` removed from the dispatcher's claim | `TestDispatchManyDispatchersNoDoubleSend` in 3/3 runs (events sent 2–3 times) |
+| Authorize uses a fresh acquirer key per attempt (end to end) | `TestChaos`: 29 payments authorized more than once, 3 where the acquirer and our records disagree |
+| Receiver without dedupe | `TestChaos`: 1,158 events processed for 877 unique ids |
 | `FOR UPDATE` removed from `GetForUpdate` | `TestConcurrencyOverRefund` in 3/3 runs (23,425 refunded of 10,000; the CHECK constraint did not catch it), `TestConcurrencyCaptureDifferentKeys` in 2/3 |
 
 ## Still to come
 
-Outbox delivery and webhook signing, and crash tests with SIGKILL (M3). Fraud (M4).
-Reconciliation (M5).
+Fraud (M4). Reconciliation (M5).

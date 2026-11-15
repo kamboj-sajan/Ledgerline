@@ -21,7 +21,13 @@ Amounts are JSON **integers** in the currency's minor unit (`2500` USD is $25.00
 | `GET /v1/payments/{id}/ledger` | | 200 list of journal transactions with signed entries and account IDs |
 | `GET /v1/accounts/{id}/balance` | | 200 balance of one of *your* accounts (`balance` in the account's normal direction, `signed_balance` debit-positive) |
 
-Webhook endpoints and events arrive in M3.
+| `POST /v1/webhook_endpoints` | `url` (http or https) | 201 endpoint, **with its `secret` (shown only here)** |
+| `POST /v1/webhook_endpoints/{id}/rotate_secret` | none | 200 endpoint with the new secret; the old one stays valid for 24 h |
+| `GET /v1/events` | query `limit` (1–100, default 20), `starting_after` (event id) | 200 list, oldest first |
+| `GET /v1/events/{id}` | | 200 event |
+| `POST /v1/events/{id}/redeliver` | none | 200; queues the event again for every enabled endpoint |
+
+Delivery semantics, signature verification and retries: [docs/webhooks.md](webhooks.md).
 
 ## State machine
 

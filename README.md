@@ -5,14 +5,13 @@ that money stays correct under concurrency, crashes and retries, with tests that
 invariant. Amounts are integers in minor units everywhere, the database itself rejects unbalanced
 journal entries, every POST is idempotent, and webhooks go out through a transactional outbox.
 
-> **Status: M2 (payments API) done.** Webhook delivery, fraud rules and reconciliation are not
-> built yet. Everything that is planned but not yet working is listed under
+> **Status: M3 (webhooks) done.** Fraud rules and reconciliation are not built yet. Everything that is planned but not yet working is listed under
 > [Not implemented](#not-implemented), and is moved out of that list only when its tests pass.
 
 ## Quickstart
 
 ```sh
-docker compose up -d --build --wait serve        # Postgres, migrations, then the API on :8080
+docker compose up -d --build --wait serve dispatch   # Postgres, migrations, the API on :8080, the webhook dispatcher
 KEY=$(docker compose run --rm -T serve merchant create -name "Demo Shop" | jq -r .api_key)
 H=(-H "Authorization: Bearer $KEY" -H "Content-Type: application/json")
 
@@ -39,7 +38,7 @@ key returns the stored response byte for byte. Capturing again with a new key is
 | M0 | Layout, Compose, Makefile, CI, migrations, `money` package | done |
 | M1 | Ledger schema, posting logic, DB-enforced invariants, property tests | done |
 | M2 | Payments API, auth, state machine, acquirer simulator, idempotency, concurrency tests | done |
-| M3 | Webhook endpoints, dispatcher, signing, receiver, retries, chaos tests | not started |
+| M3 | Webhook endpoints, dispatcher, signing, receiver, retries, chaos tests | done |
 | M4 | Fraud rules engine, evaluation harness and report | not started |
 | M5 | Bank settlement simulator and reconciliation | not started |
 | M6 | Load tests, benchmarks, docs | not started |
@@ -50,6 +49,7 @@ key returns the stored response byte for byte. Capturing again with a new key is
 make test               # unit tests with -race (no Docker)
 make test-integration   # Postgres via testcontainers (needs Docker)
 make test-concurrency   # the three concurrency acceptance tests, 25 runs each with -race
+make chaos              # SIGKILL serve/dispatch/receiver at failpoints and at random, then check everything
 make prop-long          # >= 1,000,000 generated operations each for the ledger and the payment lifecycle
 make lint               # go vet with every build tag + golangci-lint
 make db-up migrate      # local Postgres in Compose, then apply migrations
@@ -57,8 +57,8 @@ make audit              # ledger + payments-vs-ledger invariants in $DATABASE_UR
 ```
 
 Requires Go 1.27+, Docker (Compose v2), and golangci-lint v2 for `make lint`. `make help` lists
-every target. `chaos` and `load` exist already, but they exit with an error naming the milestone
-they arrive in.
+every target. `load` exists already, but it exits with an error naming the milestone it arrives
+in.
 
 ## Tests
 
@@ -68,8 +68,9 @@ picks a new random seed each time.
 
 | Suite | Command | Result |
 |-------|---------|--------|
-| Unit | `go test -race -count=1 ./...` | 42 tests, 141 subtests, 0 failures |
-| Integration (real Postgres) | `go test -race -count=1 -tags=integration ./test/integration/...` | 46 tests, 66 subtests, 0 failures, 46.9s |
+| Unit | `go test -race -count=1 ./...` | 48 tests, 152 subtests, 0 failures |
+| Integration (real Postgres) | `go test -race -count=1 -tags=integration ./test/integration/...` | 56 tests, 66 subtests, 0 failures, 55.0s |
+| Chaos (SIGKILL at failpoints and at random) | `make chaos CHAOS_COUNT=3` | 3/3 passed; per run 86–99 failpoint kills, 16–19 random kills, 853–880 events, 225–330 duplicates deduped; 41.8s total |
 | Concurrency acceptance | `make test-concurrency` | 25/25 passes for each of the 3 tests, 22.3s |
 | Property: ledger, in-memory | `make prop-long` | 1,513,623 operations in 21.2s |
 | Property: payment lifecycle, in-memory | `make prop-long` | 1,503,481 operations in 2.7s |
@@ -82,17 +83,19 @@ deliberately broken builds each key test was shown to catch.
 ## Docs
 
 - [docs/api.md](docs/api.md): endpoints, state machine, errors, fees, test card fingerprints
+- [docs/webhooks.md](docs/webhooks.md): delivery guarantees, signature verification, rotation, retries
 - [docs/ledger.md](docs/ledger.md): accounts, postings, a worked example (checked by
   `go test`), why authorization posts nothing, what the database enforces
 - [docs/INVARIANTS.md](docs/INVARIANTS.md): invariant → how it is enforced → which test proves it
-- [docs/adr/](docs/adr/): signed amounts, fees on refunds, locking, idempotency
+- [docs/adr/](docs/adr/): signed amounts, fees on refunds, locking, idempotency, outbox
 - [docs/go-notes.md](docs/go-notes.md): Go idioms explained for a C++ programmer
 
 ## Layout
 
 | Path | Contents |
 |------|----------|
-| `cmd/ledgerline` | Main binary: `serve`, `merchant create`, `migrate`, `audit`. Later: `dispatch` |
+| `cmd/ledgerline` | Main binary: `serve`, `dispatch`, `merchant create`, `migrate`, `audit` |
+| `cmd/receiver` | Sample merchant webhook endpoint: verifies signatures, dedupes event ids |
 | `internal/api` | HTTP routing, auth, errors, idempotent transactions, the phased authorize |
 | `internal/payments` | State machine, domain operations, pricing, SQL, payments-vs-ledger audit |
 | `internal/payments/paymenttest` | Stateful payment-lifecycle property test (pure and over HTTP) |
@@ -101,19 +104,17 @@ deliberately broken builds each key test was shown to catch.
 | `internal/ledger` | Chart of accounts, posting builders, validation, in-memory and Postgres ledgers, audit |
 | `internal/ledger/ledgertest` | Stateful ledger property test |
 | `internal/merchants` | Merchant creation, API-key hashing and authentication |
-| `internal/webhooks` | Transactional outbox (delivery arrives in M3) |
+| `internal/webhooks` | Outbox, endpoints, signing, dispatcher, the sample receiver's handler |
 | `internal/failpoint` | Crash points, compiled in only with the `chaos` build tag |
 | `internal/money`, `internal/id`, `internal/store` | Money type, prefixed IDs, pgx pool + migrations |
 | `migrations/` | SQL migrations, embedded into the binary |
 | `test/integration` | Tests against real Postgres (`integration` build tag) |
+| `test/chaos` | Crash test with child processes and SIGKILL (`chaos` build tag) |
 
 ## Not implemented
 
 Planned, but not built yet:
 
-- **Webhooks (M3):** webhook endpoints, `GET /v1/events`, redelivery, the dispatcher, signing,
-  the sample receiver, and the SIGKILL chaos tests. Events are already written to the outbox in
-  the same transaction as every state change.
 - Fraud rules (M4), reconciliation (M5), load tests (M6).
 
 Known gaps in what is built:
@@ -127,6 +128,10 @@ Known gaps in what is built:
   would set it per currency.
 - **No production hardening:** no rate limiting, no API-key rotation, and no request IDs or
   metrics.
+- **Webhooks:** signing secrets are stored in plaintext (production would encrypt them with a
+  KMS key). Endpoints cannot be disabled or deleted through the API. Delivered events are never
+  archived. Dispatchers poll (500 ms by default) rather than being woken by `LISTEN/NOTIFY`.
+  Endpoint URLs are not checked against private address ranges (SSRF).
 - **Ledger** (details in [docs/ledger.md](docs/ledger.md#known-gaps)): journal transactions are
   not sealed against a balanced late append; no separate database roles; no refund settlement
   lines; nothing collects from a merchant whose balance is negative.

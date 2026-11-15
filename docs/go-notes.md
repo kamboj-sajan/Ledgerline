@@ -230,3 +230,20 @@ cleanup must still happen.
 `Inject`, which the compiler inlines away, so a normal binary contains no fault-injection code
 at all. `failpoint_chaos.go` (`//go:build chaos`) defines the real one, which kills the process
 with SIGKILL. This is Go's equivalent of `#ifdef CHAOS` around a whole translation unit.
+
+## `os/exec`, signals, and why SIGKILL matters
+
+`exec.CommandContext(ctx, name, args...)` builds a child process; `cmd.Start()` runs it and
+`cmd.Wait()` reaps it, like `fork`/`exec`/`waitpid`. The chaos test supervises children with a
+goroutine per process that calls `Wait` and restarts the process when it exits.
+`signal.NotifyContext` turns SIGINT/SIGTERM into context cancellation for graceful shutdown.
+SIGKILL cannot be caught or handled at all: no `defer` runs, no transaction is rolled back by
+the client, and no response is sent. That is exactly the crash the chaos test needs, and why
+`failpoint.Inject` sends SIGKILL to its own process rather than calling `os.Exit` or panicking.
+
+## `crypto/hmac` and constant-time comparison
+
+`hmac.New(sha256.New, key)` gives a `hash.Hash`: `Write` the message, then call `Sum`.
+`hmac.Equal(a, b)` compares in time that does not depend on where the first difference is, so an
+attacker cannot learn a valid signature byte by byte from response times, which a C++ `memcmp`
+or `==` would allow.

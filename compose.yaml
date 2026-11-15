@@ -41,5 +41,15 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Delivers webhooks from the outbox. Scale with: docker compose up --scale dispatch=3
+  dispatch:
+    build: .
+    command: ["dispatch"]
+    environment:
+      DATABASE_URL: postgres://ledgerline:ledgerline@postgres:5432/ledgerline?sslmode=disable
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   pgdata:
