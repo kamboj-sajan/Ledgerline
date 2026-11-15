@@ -78,7 +78,8 @@ func TestMigrationsUpDownUp(t *testing.T) {
 }
 
 // countUserObjects counts tables, views, sequences, functions and types in
-// schema public, excluding goose's own version table.
+// schema public (excluding goose's own version table), plus any schema other
+// than public and the system ones (such as acquirer).
 func countUserObjects(t *testing.T, pool *pgxpool.Pool) int {
 	t.Helper()
 	const q = `
@@ -90,7 +91,9 @@ func countUserObjects(t *testing.T, pool *pgxpool.Pool) int {
 		     WHERE n.nspname = 'public')
 		+ (SELECT count(*) FROM pg_type ty JOIN pg_namespace n ON n.oid = ty.typnamespace
 		     WHERE n.nspname = 'public' AND ty.typtype IN ('e','d','c')
-		       AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = ty.oid))`
+		       AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = ty.oid))
+		+ (SELECT count(*) FROM pg_namespace
+		     WHERE nspname NOT IN ('public', 'information_schema') AND nspname NOT LIKE 'pg\_%')`
 	var n int
 	if err := pool.QueryRow(t.Context(), q).Scan(&n); err != nil {
 		t.Fatal(err)
