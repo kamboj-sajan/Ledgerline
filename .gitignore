@@ -15,3 +15,7 @@ coverage.*
 .DS_Store
 .idea/
 .vscode/
+
+# rapid writes replay files for failing property tests here. Real counterexamples are turned
+# into named regression tests instead of being committed as opaque replay files.
+testdata/rapid/
