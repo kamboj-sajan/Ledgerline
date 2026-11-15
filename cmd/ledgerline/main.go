@@ -29,6 +29,7 @@ import (
 
 	"github.com/kamboj-sajan/ledgerline/internal/acquirer"
 	"github.com/kamboj-sajan/ledgerline/internal/api"
+	"github.com/kamboj-sajan/ledgerline/internal/fraud"
 	"github.com/kamboj-sajan/ledgerline/internal/idempotency"
 	"github.com/kamboj-sajan/ledgerline/internal/ledger"
 	"github.com/kamboj-sajan/ledgerline/internal/merchants"
@@ -202,6 +203,7 @@ func runServe(ctx context.Context, args []string) error {
 	callTimeout := fs.Duration("acquirer-call-timeout", def.AcquirerTimeout, "timeout for each acquirer call")
 	expiry := fs.Duration("authorization-expiry", 7*24*time.Hour, "uncaptured authorizations older than this are expired")
 	sweepEvery := fs.Duration("sweep-interval", time.Minute, "how often to expire authorizations and purge old idempotency keys")
+	fraudPath := fs.String("fraud-config", "", "fraud rules JSON (default: the embedded internal/fraud/default.json)")
 	var sim acquirer.Config
 	fs.DurationVar(&sim.Latency, "acquirer-latency", 50*time.Millisecond, "simulated acquirer base latency")
 	fs.DurationVar(&sim.Jitter, "acquirer-jitter", 50*time.Millisecond, "simulated acquirer extra random latency")
@@ -217,6 +219,13 @@ func runServe(ctx context.Context, args []string) error {
 		return fmt.Errorf("serve: -log-level: %w", err)
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	rules := fraud.Default()
+	if *fraudPath != "" {
+		var err error
+		if rules, err = fraud.Load(*fraudPath); err != nil {
+			return err
+		}
+	}
 
 	pool, err := store.Open(ctx, *dsn)
 	if err != nil {
@@ -224,7 +233,7 @@ func runServe(ctx context.Context, args []string) error {
 	}
 	defer pool.Close()
 	srv := api.New(pool, acquirer.NewSimulator(pool, sim),
-		api.Config{AuthorizeLockTimeout: *lockTimeout, AcquirerTimeout: *callTimeout}, log)
+		api.Config{AuthorizeLockTimeout: *lockTimeout, AcquirerTimeout: *callTimeout, Fraud: rules}, log)
 
 	go sweep(ctx, log, srv, pool, *expiry, *sweepEvery)
 

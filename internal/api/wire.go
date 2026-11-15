@@ -32,8 +32,14 @@ type paymentJSON struct {
 	Metadata         map[string]string `json:"metadata"`
 	FailureCode      *string           `json:"failure_code"`
 	FailureMessage   *string           `json:"failure_message"`
+	Fraud            *fraudJSON        `json:"fraud"` // null until authorization
 	CreatedAt        time.Time         `json:"created_at"`
 	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+type fraudJSON struct {
+	Decision string   `json:"decision"`
+	Rules    []string `json:"rules"`
 }
 
 func toPaymentJSON(p payments.Payment) paymentJSON {
@@ -41,8 +47,17 @@ func toPaymentJSON(p payments.Payment) paymentJSON {
 	if meta == nil {
 		meta = map[string]string{}
 	}
+	var fr *fraudJSON
+	if p.FraudDecision != "" {
+		rules := p.FraudRules
+		if rules == nil {
+			rules = []string{}
+		}
+		fr = &fraudJSON{Decision: p.FraudDecision, Rules: rules}
+	}
 	return paymentJSON{
-		ID: p.ID, Object: "payment", Status: p.Status,
+		Fraud: fr,
+		ID:    p.ID, Object: "payment", Status: p.Status,
 		Amount: p.Amount.Amount(), Currency: p.Amount.Currency().Code(),
 		AmountAuthorized: p.Authorized.Amount(), AmountCaptured: p.Captured.Amount(),
 		AmountRefunded: p.Refunded.Amount(), Fee: p.Fee.Amount(),

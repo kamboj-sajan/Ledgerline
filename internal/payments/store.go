@@ -15,7 +15,7 @@ import (
 
 const columns = `id, merchant_id, status, currency, amount, authorized_amount, captured_amount,
 	refunded_amount, fee_amount, customer_id, card_fingerprint, card_country, ip_country, metadata,
-	failure_code, failure_message, acquirer_reference, created_at, updated_at`
+	failure_code, failure_message, acquirer_reference, fraud_decision, fraud_rules, created_at, updated_at`
 
 // Insert stores a new payment and fills in its timestamps.
 func Insert(ctx context.Context, db store.DB, p *Payment) error {
@@ -57,11 +57,12 @@ func Update(ctx context.Context, tx pgx.Tx, p *Payment) error {
 		UPDATE payments SET
 			status = $2, authorized_amount = $3, captured_amount = $4, refunded_amount = $5,
 			fee_amount = $6, failure_code = $7, failure_message = $8, acquirer_reference = $9,
-			updated_at = now()
+			fraud_decision = $10, fraud_rules = $11, updated_at = now()
 		WHERE id = $1
 		RETURNING updated_at`,
 		p.ID, string(p.Status), p.Authorized.Amount(), p.Captured.Amount(), p.Refunded.Amount(),
 		p.Fee.Amount(), nullIfEmpty(p.FailureCode), nullIfEmpty(p.FailureMessage), nullIfEmpty(p.AcquirerReference),
+		nullIfEmpty(p.FraudDecision), nonNil(p.FraudRules),
 	).Scan(&p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("payments: updating %s: %w", p.ID, err)
@@ -96,11 +97,11 @@ func scanOne(row pgx.Row) (Payment, error) {
 		status, currency                      string
 		amount, auth, captured, refunded, fee int64
 		meta                                  []byte
-		failCode, failMsg, acqRef             *string
+		failCode, failMsg, acqRef, fraudDec   *string
 	)
 	err := row.Scan(&p.ID, &p.MerchantID, &status, &currency, &amount, &auth, &captured, &refunded, &fee,
 		&p.CustomerID, &p.Card.Fingerprint, &p.Card.Country, &p.IPCountry, &meta,
-		&failCode, &failMsg, &acqRef, &p.CreatedAt, &p.UpdatedAt)
+		&failCode, &failMsg, &acqRef, &fraudDec, &p.FraudRules, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Payment{}, ErrNotFound
 	}
@@ -118,7 +119,36 @@ func scanOne(row pgx.Row) (Payment, error) {
 		return Payment{}, fmt.Errorf("payments: stored metadata: %w", err)
 	}
 	p.FailureCode, p.FailureMessage, p.AcquirerReference = deref(failCode), deref(failMsg), deref(acqRef)
+	p.FraudDecision = deref(fraudDec)
 	return p, nil
+}
+
+// RecentByCard returns payments made with a card fingerprint since a time,
+// excluding one payment, across all merchants: fraud velocity is about the
+// card, not the shop.
+func RecentByCard(ctx context.Context, db store.DB, fingerprint, excludeID string, since time.Time) ([]Payment, error) {
+	rows, err := db.Query(ctx, `SELECT `+columns+` FROM payments
+		WHERE card_fingerprint = $1 AND id <> $2 AND created_at >= $3`, fingerprint, excludeID, since)
+	if err != nil {
+		return nil, fmt.Errorf("payments: card history: %w", err)
+	}
+	defer rows.Close()
+	var out []Payment
+	for rows.Next() {
+		p, err := scanOne(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func nullIfEmpty(s string) *string {

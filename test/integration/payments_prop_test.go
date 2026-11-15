@@ -18,6 +18,7 @@ import (
 
 	"github.com/kamboj-sajan/ledgerline/internal/acquirer"
 	"github.com/kamboj-sajan/ledgerline/internal/api"
+	"github.com/kamboj-sajan/ledgerline/internal/fraud"
 	"github.com/kamboj-sajan/ledgerline/internal/id"
 	"github.com/kamboj-sajan/ledgerline/internal/ledger"
 	"github.com/kamboj-sajan/ledgerline/internal/merchants"
@@ -60,7 +61,10 @@ func newHTTPSystem(rt *rapid.T) *httpSystem {
 		}
 		s.keys[name], s.ids[name] = key, m.ID
 	}
-	srv := api.New(db, acquirer.NewSimulator(db, acquirer.Config{Seed: 11}), api.DefaultConfig(),
+	// No fraud rules: the model does not predict them (they are tested separately).
+	cfg := api.DefaultConfig()
+	cfg.Fraud = fraud.Config{}
+	srv := api.New(db, acquirer.NewSimulator(db, acquirer.Config{Seed: 11}), cfg,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s.srv = httptest.NewServer(srv.Handler())
 	rt.Cleanup(s.srv.Close)

@@ -47,8 +47,9 @@ func (e *TransitionError) Unwrap() error { return ErrInvalidTransition }
 
 // Failure codes stored on failed payments.
 const (
-	FailureVoided  = "voided"
-	FailureExpired = "authorization_expired"
+	FailureVoided         = "voided"
+	FailureExpired        = "authorization_expired"
+	FailureFraudSuspected = "fraud_suspected"
 )
 
 // Card is the card used for a payment. Ledgerline never sees card numbers,
@@ -78,6 +79,11 @@ type Payment struct {
 	FailureCode       string
 	FailureMessage    string
 	AcquirerReference string
+
+	// FraudDecision is "allow", "review" or "block" once fraud rules ran at
+	// authorization, "" before. FraudRules names the rules that fired.
+	FraudDecision string
+	FraudRules    []string
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -134,6 +140,22 @@ func (p *Payment) MarkDeclined(code, message string) error {
 		return err
 	}
 	p.FailureCode, p.FailureMessage = code, message
+	return nil
+}
+
+// RecordFraud stores the fraud engine's verdict. It does not change the
+// status: an allowed or reviewed payment goes on to the acquirer.
+func (p *Payment) RecordFraud(decision string, rules []string) {
+	p.FraudDecision, p.FraudRules = decision, rules
+}
+
+// BlockForFraud fails a payment that fraud rules blocked, before it reaches
+// the acquirer: created → failed with failure code fraud_suspected.
+func (p *Payment) BlockForFraud(rules []string) error {
+	if err := p.MarkDeclined(FailureFraudSuspected, "blocked by fraud rules: "+strings.Join(rules, ", ")); err != nil {
+		return err
+	}
+	p.RecordFraud("block", rules)
 	return nil
 }
 

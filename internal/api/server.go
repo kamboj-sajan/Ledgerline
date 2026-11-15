@@ -20,6 +20,7 @@ import (
 
 	"github.com/kamboj-sajan/ledgerline/internal/acquirer"
 	"github.com/kamboj-sajan/ledgerline/internal/failpoint"
+	"github.com/kamboj-sajan/ledgerline/internal/fraud"
 	"github.com/kamboj-sajan/ledgerline/internal/idempotency"
 	"github.com/kamboj-sajan/ledgerline/internal/merchants"
 )
@@ -35,11 +36,14 @@ type Config struct {
 	AuthorizeLockTimeout time.Duration
 	// AcquirerTimeout bounds each call to the acquirer.
 	AcquirerTimeout time.Duration
+	// Fraud is the rules configuration applied at authorization. The zero
+	// value enables no rule.
+	Fraud fraud.Config
 }
 
 // DefaultConfig returns production-style defaults.
 func DefaultConfig() Config {
-	return Config{AuthorizeLockTimeout: 30 * time.Second, AcquirerTimeout: 10 * time.Second}
+	return Config{AuthorizeLockTimeout: 30 * time.Second, AcquirerTimeout: 10 * time.Second, Fraud: fraud.Default()}
 }
 
 // Server serves the API.

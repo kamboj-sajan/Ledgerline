@@ -9,6 +9,7 @@ import (
 
 	"github.com/kamboj-sajan/ledgerline/internal/acquirer"
 	"github.com/kamboj-sajan/ledgerline/internal/failpoint"
+	"github.com/kamboj-sajan/ledgerline/internal/fraud"
 	"github.com/kamboj-sajan/ledgerline/internal/idempotency"
 	"github.com/kamboj-sajan/ledgerline/internal/merchants"
 	"github.com/kamboj-sajan/ledgerline/internal/payments"
@@ -104,7 +105,7 @@ func (s *Server) authorizeBegin(ctx context.Context, w http.ResponseWriter, r *h
 		return payments.Payment{}, "", true
 	}
 
-	p, err := payments.Get(ctx, tx, m.ID, r.PathValue("id"))
+	p, err := payments.GetForUpdate(ctx, tx, m.ID, r.PathValue("id"))
 	if err != nil {
 		s.writeDomainError(w, r, err) // not found: not stored
 		return payments.Payment{}, "", true
@@ -119,6 +120,24 @@ func (s *Server) authorizeBegin(ctx context.Context, w http.ResponseWriter, r *h
 			s.saveAndWrite(ctx, w, r, tx, req, ae.Status, errorBody{ae})
 			return payments.Payment{}, "", true
 		}
+		// Fraud rules run once, on the fresh request. A resumed request
+		// already recorded its verdict.
+		blocked, err := s.screen(ctx, tx, &p)
+		if err != nil {
+			s.internalError(w, r, err)
+			return payments.Payment{}, "", true
+		}
+		if blocked {
+			out := toPaymentJSON(p)
+			if _, err := webhooks.Insert(ctx, tx, m.ID, webhooks.EventPaymentFailed, p.ID, out); err != nil {
+				s.internalError(w, r, err)
+				return payments.Payment{}, "", true
+			}
+			ae := &apiError{Status: http.StatusPaymentRequired, Type: typeCard, Code: payments.FailureFraudSuspected,
+				Message: p.FailureMessage, PaymentID: p.ID}
+			s.saveAndWrite(ctx, w, r, tx, req, ae.Status, errorBody{ae})
+			return payments.Payment{}, "", true
+		}
 	}
 	token, err := idempotency.Start(ctx, tx, req, p.ID)
 	if err != nil {
@@ -130,6 +149,41 @@ func (s *Server) authorizeBegin(ctx context.Context, w http.ResponseWriter, r *h
 		return payments.Payment{}, "", true
 	}
 	return p, token, false
+}
+
+// screen runs the fraud rules on a payment about to be authorized, with the
+// card's recent history across all merchants, and records the verdict on the
+// (locked) payment. A block fails the payment here; the acquirer is never
+// called.
+func (s *Server) screen(ctx context.Context, tx pgx.Tx, p *payments.Payment) (blocked bool, err error) {
+	cfg := s.cfg.Fraud
+	history, err := payments.RecentByCard(ctx, tx, p.Card.Fingerprint, p.ID, p.CreatedAt.Add(-cfg.HistoryWindow.Duration))
+	if err != nil {
+		return false, err
+	}
+	hist := make([]fraud.Transaction, len(history))
+	for i, h := range history {
+		hist[i] = fraudTransaction(h)
+	}
+	res := cfg.Evaluate(fraudTransaction(*p), hist)
+	if res.Decision == fraud.Block {
+		if err := p.BlockForFraud(res.Rules()); err != nil {
+			return false, err
+		}
+	} else {
+		p.RecordFraud(string(res.Decision), res.Rules())
+	}
+	if res.Decision != fraud.Allow {
+		s.log.Info("fraud rules fired", "payment", p.ID, "decision", res.Decision, "hits", res.Hits)
+	}
+	return res.Decision == fraud.Block, payments.Update(ctx, tx, p)
+}
+
+func fraudTransaction(p payments.Payment) fraud.Transaction {
+	return fraud.Transaction{
+		ID: p.ID, CardFingerprint: p.Card.Fingerprint, Amount: p.Amount.Amount(), Currency: p.Amount.Currency().Code(),
+		Time: p.CreatedAt, CardCountry: p.Card.Country, IPCountry: p.IPCountry,
+	}
 }
 
 // authorizeFinish is phase 3.
