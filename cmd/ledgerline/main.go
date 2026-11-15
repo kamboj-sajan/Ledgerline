@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/kamboj-sajan/ledgerline/internal/ledger"
+	"github.com/kamboj-sajan/ledgerline/internal/payments"
 	"github.com/kamboj-sajan/ledgerline/internal/store"
 )
 
@@ -134,14 +135,23 @@ func runAudit(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // read-only: nothing to commit
 
-	report, err := ledger.Audit(ctx, tx)
+	ledgerReport, err := ledger.Audit(ctx, tx)
 	if err != nil {
 		return err
 	}
-	report.Write(stdout)
-	if !report.OK() {
-		return errors.New("audit: ledger invariants violated")
+	paymentsReport, err := payments.Audit(ctx, tx)
+	if err != nil {
+		return err
 	}
+	fmt.Fprintln(stdout, "== ledger")
+	ledgerReport.Write(stdout)
+	fmt.Fprintln(stdout, "== payments vs ledger")
+	paymentsReport.Write(stdout)
+	if !ledgerReport.OK() || !paymentsReport.OK() {
+		fmt.Fprintln(stdout, "AUDIT FAILED")
+		return errors.New("audit: invariants violated")
+	}
+	fmt.Fprintln(stdout, "AUDIT PASSED")
 	return nil
 }
 

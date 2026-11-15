@@ -195,3 +195,12 @@ inside or outside a transaction. The Go habit is to declare small interfaces whe
 consumed, not big ones where types are defined. A C++ base class has to be planned up front;
 a Go interface can be declared after the fact around types you don't own. `storetest.TB` does
 the same, so `*rapid.T` can be passed where tests normally pass `*testing.T`.
+
+## Custom error types: `errors.As` and `Unwrap`
+
+A sentinel (`ErrInvalidTransition`) says *what kind* of failure happened. When the caller also
+needs details, return a struct that implements `error`: `*payments.TransitionError` carries the
+event and the from/to states. Its `Unwrap() error` method returns `ErrInvalidTransition`, so
+`errors.Is(err, payments.ErrInvalidTransition)` still matches, and
+`errors.As(err, &te)` gets the struct back (like `dynamic_cast` on a caught exception). The API
+uses `errors.Is` to pick the HTTP status and the struct's `Error()` text for the message.

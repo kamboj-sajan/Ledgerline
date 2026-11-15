@@ -11,16 +11,11 @@ import (
 
 	"github.com/kamboj-sajan/ledgerline/internal/id"
 	"github.com/kamboj-sajan/ledgerline/internal/money"
+	"github.com/kamboj-sajan/ledgerline/internal/store"
 )
 
-// DB is the query interface the read functions need. *pgxpool.Pool,
-// *pgx.Conn and pgx.Tx all satisfy it, so a read can run inside or outside a
-// transaction.
-type DB interface {
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
+// DB is the query interface used by this package; see store.DB.
+type DB = store.DB
 
 // Account is a stored account.
 type Account struct {

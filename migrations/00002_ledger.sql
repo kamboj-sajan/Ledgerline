@@ -42,8 +42,10 @@ CREATE TABLE accounts (
 CREATE TABLE journal_transactions (
     id           text        PRIMARY KEY,
     kind         text        NOT NULL CHECK (kind IN ('capture', 'refund', 'settlement', 'reversal')),
-    -- The payment this transaction belongs to. The foreign key is added in the
-    -- same migration that creates the payments table.
+    -- The payment this transaction belongs to. Deliberately not a foreign key:
+    -- the ledger does not depend on the payments table. `ledgerline audit`
+    -- checks that every payment_id exists and that the ledger agrees with the
+    -- payment's captured, refunded and fee amounts.
     payment_id   text,
     -- An identifier from outside the ledger, e.g. a bank settlement reference.
     -- UNIQUE makes posting the same external event twice impossible, so

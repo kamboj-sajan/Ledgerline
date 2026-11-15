@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+
+	"github.com/kamboj-sajan/ledgerline/internal/store"
 )
 
 // auditListLimit caps how many offending IDs a report lists per check. The
@@ -76,51 +78,25 @@ func Audit(ctx context.Context, db DB) (AuditReport, error) {
 	}
 
 	var err2 error
-	r.UnbalancedCount, r.Unbalanced, err2 = auditIDs[string](ctx, db, `
+	r.UnbalancedCount, r.Unbalanced, err2 = store.CountAndList[string](ctx, db, `
 		SELECT DISTINCT transaction_id FROM entries
-		GROUP BY transaction_id, currency HAVING sum(amount) <> 0`)
+		GROUP BY transaction_id, currency HAVING sum(amount) <> 0`, auditListLimit)
 	if err2 != nil {
 		return r, fmt.Errorf("ledger: audit unbalanced: %w", err2)
 	}
-	r.TooFewEntriesCount, r.TooFewEntries, err2 = auditIDs[string](ctx, db, `
+	r.TooFewEntriesCount, r.TooFewEntries, err2 = store.CountAndList[string](ctx, db, `
 		SELECT jt.id FROM journal_transactions jt LEFT JOIN entries e ON e.transaction_id = jt.id
-		GROUP BY jt.id HAVING count(e.id) < 2`)
+		GROUP BY jt.id HAVING count(e.id) < 2`, auditListLimit)
 	if err2 != nil {
 		return r, fmt.Errorf("ledger: audit entry counts: %w", err2)
 	}
-	r.CurrencyMismatchCount, r.CurrencyMismatches, err2 = auditIDs[int64](ctx, db, `
+	r.CurrencyMismatchCount, r.CurrencyMismatches, err2 = store.CountAndList[int64](ctx, db, `
 		SELECT e.id FROM entries e JOIN accounts a ON a.id = e.account_id
-		WHERE a.currency <> e.currency`)
+		WHERE a.currency <> e.currency`, auditListLimit)
 	if err2 != nil {
 		return r, fmt.Errorf("ledger: audit currencies: %w", err2)
 	}
 	return r, nil
-}
-
-// auditIDs returns how many rows query produces, and the first
-// auditListLimit of them in order.
-func auditIDs[T any](ctx context.Context, db DB, query string) (int64, []T, error) {
-	var n int64
-	if err := db.QueryRow(ctx, `SELECT count(*) FROM (`+query+`) q`).Scan(&n); err != nil {
-		return 0, nil, err
-	}
-	if n == 0 {
-		return 0, nil, nil
-	}
-	rows, err := db.Query(ctx, `SELECT * FROM (`+query+`) q ORDER BY 1 LIMIT `+fmt.Sprint(auditListLimit))
-	if err != nil {
-		return 0, nil, err
-	}
-	defer rows.Close()
-	var ids []T
-	for rows.Next() {
-		var v T
-		if err := rows.Scan(&v); err != nil {
-			return 0, nil, err
-		}
-		ids = append(ids, v)
-	}
-	return n, ids, rows.Err()
 }
 
 // Write prints the report for humans.
@@ -147,9 +123,4 @@ func (r AuditReport) Write(w io.Writer) {
 	check("transactions balanced per currency", r.UnbalancedCount, r.Unbalanced)
 	check("transactions with at least 2 entries", r.TooFewEntriesCount, r.TooFewEntries)
 	check("entry currency matches account currency", r.CurrencyMismatchCount, r.CurrencyMismatches)
-	if r.OK() {
-		fmt.Fprintln(w, "AUDIT PASSED")
-	} else {
-		fmt.Fprintln(w, "AUDIT FAILED")
-	}
 }
