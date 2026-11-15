@@ -3,6 +3,7 @@
 // Usage:
 //
 //	ledgerline serve   [flags]                 run the HTTP API
+//	ledgerline dispatch [flags]                deliver webhooks from the outbox
 //	ledgerline merchant create -name NAME      create a merchant and print its API key
 //	ledgerline migrate [up|down|status]        manage schema migrations
 //	ledgerline audit                           check ledger and payment invariants
@@ -33,12 +34,14 @@ import (
 	"github.com/kamboj-sajan/ledgerline/internal/merchants"
 	"github.com/kamboj-sajan/ledgerline/internal/payments"
 	"github.com/kamboj-sajan/ledgerline/internal/store"
+	"github.com/kamboj-sajan/ledgerline/internal/webhooks"
 )
 
 const usage = `usage: ledgerline <command> [flags]
 
 commands:
   serve                      run the HTTP API (see 'ledgerline serve -h')
+  dispatch                   deliver webhook events (any number may run at once)
   merchant create -name N    create a merchant; prints its ID and API key (shown once)
   migrate [up|down|status]   apply, roll back one, or list schema migrations
   audit                      check ledger and payment invariants; exits 1 if any fail
@@ -68,6 +71,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return runAudit(ctx, args[1:], stdout)
 	case "serve":
 		return runServe(ctx, args[1:])
+	case "dispatch":
+		return runDispatch(ctx, args[1:])
 	case "merchant":
 		if len(args) < 2 || args[1] != "create" {
 			return errors.New("usage: ledgerline merchant create -name NAME")
@@ -300,4 +305,29 @@ func envOr(name, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func runDispatch(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("dispatch", flag.ContinueOnError)
+	dsn := databaseURLFlag(fs)
+	cfg := webhooks.DefaultDispatcherConfig()
+	fs.IntVar(&cfg.BatchSize, "batch", cfg.BatchSize, "deliveries claimed per round")
+	fs.IntVar(&cfg.Workers, "workers", cfg.Workers, "concurrent requests")
+	fs.DurationVar(&cfg.Lease, "lease", cfg.Lease, "how long a claimed delivery stays claimed (re-sent after a crash once it expires)")
+	fs.DurationVar(&cfg.HTTPTimeout, "timeout", cfg.HTTPTimeout, "per-request timeout")
+	fs.DurationVar(&cfg.BaseDelay, "retry-base", cfg.BaseDelay, "first retry delay cap (full jitter)")
+	fs.DurationVar(&cfg.MaxDelay, "retry-max", cfg.MaxDelay, "retry delay cap")
+	fs.IntVar(&cfg.MaxAttempts, "max-attempts", cfg.MaxAttempts, "attempts before a delivery is dead")
+	fs.DurationVar(&cfg.PollInterval, "poll", cfg.PollInterval, "sleep when nothing is due")
+	if err := parseWithDSN(fs, args, dsn); err != nil {
+		return err
+	}
+	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	pool, err := store.Open(ctx, *dsn)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	log.Info("dispatching")
+	return webhooks.NewDispatcher(pool, cfg, log).Run(ctx)
 }
