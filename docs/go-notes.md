@@ -141,3 +141,29 @@ read and change it after the `return` statement has set it:
 reported without overwriting an earlier one. A plain `defer m.Close()` would silently throw the
 `Close` error away. In C++, a throwing destructor cannot report anything safely, so this has no
 direct equivalent there.
+
+## Enums are typed constants
+
+Go has no `enum class`. The idiom is a named type plus constants of that type:
+`type AccountCode string` and `const MerchantPayable AccountCode = "merchant_payable"`. A plain
+`string` cannot be passed where an `AccountCode` is expected without an explicit conversion,
+which gives some of `enum class`'s type safety. Unlike C++, any string can still be converted
+into an `AccountCode`, so validity is checked at runtime (`AccountKey.validate`), and the SQL
+`CHECK` constraint backs it up. Named types can have methods: `MerchantPayable.Type()`. Used in:
+`internal/ledger/ledger.go`.
+
+## Slices alias their backing array
+
+A slice is a small header (pointer, length, capacity) that points at a shared array, roughly
+`std::span` plus a capacity. Copying a struct that contains a slice copies the header, not the
+elements. So `Memory.Post` stores `slices.Clone(t.Postings)`: otherwise a caller who modified its
+own slice after posting would silently rewrite ledger history. `TestMemoryStoresACopy` checks
+this.
+
+## Structs as map keys
+
+Any comparable type can be a map key, including structs of comparable fields. So
+`map[AccountKey]money.Money` works with no hash function to write, unlike
+`std::unordered_map`, which needs a `std::hash` specialisation. Map iteration order is
+*deliberately randomised*, so code that needs determinism sorts the keys first (see
+`Memory.Accounts`).
