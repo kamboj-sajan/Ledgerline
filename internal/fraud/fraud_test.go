@@ -132,8 +132,10 @@ func TestHaversine(t *testing.T) {
 
 func TestConfigParsing(t *testing.T) {
 	d := fraud.Default()
-	if d.Velocity.MaxCount == 0 || d.AmountAbsolute.Max["USD"] == 0 || !d.CountryMismatch.Enabled {
-		t.Fatalf("default config looks empty: %+v", d)
+	// The defaults come from docs/fraud-eval.md: greedy selection on the
+	// Sparkov tuning split kept only the 24h velocity amount rule.
+	if d.Velocity.Window.Duration != 24*time.Hour || d.Velocity.MaxAmount["USD"] != 273_888 || !d.CountryMismatch.Enabled {
+		t.Fatalf("default config = %+v", d)
 	}
 	for _, bad := range []string{
 		`{"velocity": {"window": "1h"}, "history_window": "10m"}`, // velocity longer than history

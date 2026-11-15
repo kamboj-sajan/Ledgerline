@@ -247,3 +247,12 @@ the client, and no response is sent. That is exactly the crash the chaos test ne
 `hmac.Equal(a, b)` compares in time that does not depend on where the first difference is, so an
 attacker cannot learn a valid signature byte by byte from response times, which a C++ `memcmp`
 or `==` would allow.
+
+## Function values and closures
+
+Go functions are first-class values, like `std::function` but with no allocation or type
+erasure to think about for most uses. `eval.Sweep(tune, test, candidates, firesAt)` takes
+`firesAt func(threshold float64, e Example) bool`. Each rule passes a closure that captures its
+own config and calls `fraud.Config.Fires`, so one sweep routine serves every rule.
+`flag := func(e Example) bool { return firesAt(th, e) }` captures the loop variable `th`. Since
+Go 1.22 that is safe, because each iteration gets its own copy.

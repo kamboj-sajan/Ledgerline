@@ -65,6 +65,16 @@ Every other operation is `409 invalid_state_transition`. The table is
 
 A replayed response is byte-identical to the original and carries `Idempotent-Replayed: true`.
 
+## Fraud
+
+Authorization runs the rules in `internal/fraud` against the card's payments across all
+merchants in the last 30 days. The verdict appears on the payment as
+`"fraud": {"decision": "allow" | "review" | "block", "rules": [...]}`. `block` fails the payment
+with `failure_code: fraud_suspected` and returns `402 card_error fraud_suspected`; the acquirer
+is never called. `review` is recorded and the payment continues. Thresholds are a JSON file
+(`ledgerline serve -fraud-config FILE`). The embedded default and its evidence are in
+[fraud-eval.md](fraud-eval.md).
+
 ## Fees
 
 Per merchant: `round_half_up(captured × fee_bps / 10000) + fee_fixed`, capped at the captured

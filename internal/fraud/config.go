@@ -103,6 +103,16 @@ func (c Config) Validate() error {
 var defaultJSON []byte
 
 // Default returns the embedded default configuration (internal/fraud/default.json).
+//
+// Where its values come from (docs/fraud-eval.md): greedy forward selection on
+// the Sparkov tuning split kept only velocity_amount over 24h above $2,738.88
+// (held-out precision 0.317, recall 0.412). Every other measurable rule
+// lowered the combined F1 there and is off. geo_country_mismatch cannot be
+// measured on either dataset (ULB has no location, Sparkov is US-only), so it
+// is a hand-set review rule. Every action is review, not block: with
+// precision near 0.3, blocking would refuse about two legitimate payments for
+// each fraudulent one. Thresholds exist only for USD because the tuning
+// data is USD.
 func Default() Config {
 	c, err := Parse(defaultJSON)
 	if err != nil {

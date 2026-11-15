@@ -105,6 +105,17 @@ see random kills and every failpoint fire. Then:
 | Receiver processed each event id exactly once | passed; 225–330 duplicate deliveries deduped per run |
 | No payment authorized twice at the acquirer; acquirer and our records agree | passed |
 
+## Fraud
+
+| Invariant | Enforced by | Proven by |
+|-----------|-------------|-----------|
+| Rules are pure: the same (transaction, history) gives the same verdict, whatever the history order | Code: `fraud.Config.Signals`/`Decide` take no clock and no database | `TestPropOrderDoesNotMatter`, `TestSignals` |
+| Raising a threshold never makes a rule fire more (what makes sweeps meaningful) | Code | `TestPropLooserThresholdsNeverAddHits` |
+| A blocked payment fails with `fraud_suspected` and never reaches the acquirer | Code: phase 1 of authorize; DB: `payments_fraud_failure` CHECK | `TestFraudBlockFailsPaymentWithoutCallingAcquirer` |
+| The verdict and fired rules are stored on the payment; review still authorizes | Code | `TestFraudReviewStillAuthorizes`, `TestFraudAllowRecordsDecision` |
+| Velocity is per card across all merchants | Code: `payments.RecentByCard` | `TestFraudVelocityAcrossMerchants` |
+| The evaluation tunes on the earlier split only, and the API and the harness run the same rule code | `internal/fraud/eval` | `TestSweepChoosesOnTuneOnly`, `TestLoadSparkovUsesTrainHistoryForTest`; report in [fraud-eval.md](fraud-eval.md) |
+
 ## Schema
 
 | Invariant | Enforced by | Proven by |
@@ -134,4 +145,4 @@ or in a scratch copy of the repo.
 
 ## Still to come
 
-Fraud (M4). Reconciliation (M5).
+Reconciliation (M5).

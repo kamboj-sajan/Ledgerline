@@ -116,7 +116,7 @@ func ulb(b *strings.Builder, path string) {
 
 	b.WriteString(`## ULB credit-card fraud (Kaggle mlg-ulb/creditcardfraud)
 
-European cardholders, two days in September 2013. Only ` + "`Time`" + ` and ` + "`Amount`" + ` are raw
+European cardholders over two days in September 2013 (per the dataset's description). Only ` + "`Time`" + ` and ` + "`Amount`" + ` are raw
 fields. ` + "`V1`–`V28`" + ` are anonymised PCA components, and **there is no card identifier and no
 location**. So velocity, relative-amount and geography rules cannot be computed, and **this
 dataset can only test the absolute amount rule.** Split by time: the first 70% of
@@ -163,10 +163,12 @@ func sparkov(b *strings.Builder, trainPath, testPath string) fraud.Config {
 		fail(err)
 	}
 
-	b.WriteString(`## Sparkov simulated transactions (Kaggle kartik2112/fraud-detection)
-
-Simulated with the Sparkov generator: about 1,000 US cardholders and 800 merchants, with card
-number, Unix time, amount, and cardholder and merchant latitude/longitude. Tuned on
+	cards := map[string]bool{}
+	for _, e := range append(train[:len(train):len(train)], test...) {
+		cards[e.Tx.CardFingerprint] = true
+	}
+	fmt.Fprintf(b, "## Sparkov simulated transactions (Kaggle kartik2112/fraud-detection)\n\nSimulated with the Sparkov generator: %d distinct US cards (counted in this run), with card\nnumber, Unix time, amount, and cardholder and merchant latitude/longitude. ", len(cards))
+	b.WriteString(`Tuned on
 ` + "`fraudTrain.csv`" + ` (earlier dates), reported on ` + "`fraudTest.csv`" + ` (later dates). Both files are
 replayed as one time-ordered stream, so a test transaction sees the card's earlier train
 transactions as history, as production would. Labels are never used to compute signals.
@@ -259,37 +261,86 @@ the cardholder-to-merchant distance (` + "`geo_distance`" + `).
 		row(b, s.name, s.format(s.points[s.best].Threshold), s.points[s.best])
 	}
 
-	// The engine has one velocity window. Pick the one whose better velocity
-	// rule scores higher on the tuning split, and build the tuned config.
+	// The engine has one velocity window: use the one whose better velocity
+	// rule scores higher on the tuning split.
 	bestWindow, bestF1 := 0, -1.0
 	for _, s := range sweeps {
 		if s.window >= 0 && s.points[s.best].Tune.F1() > bestF1 {
 			bestWindow, bestF1 = s.window, s.points[s.best].Tune.F1()
 		}
 	}
-	tuned := base
-	tuned.Velocity.Window = fraud.Duration{Duration: windows[bestWindow]}
-	for _, s := range sweeps {
+
+	// Combine rules by greedy forward selection on the tuning split only:
+	// start with no rules, and in each round enable the rule (at its tuned
+	// threshold) that most improves the combined F1 of fraud.Config.Decide.
+	// Stop when no rule improves it. A rule whose best threshold is still
+	// noise (it would only add false positives) stays disabled.
+	enable := func(c *fraud.Config, s *ruleSweep) {
 		th := s.points[s.best].Threshold
 		switch {
 		case s.name == "amount_absolute":
-			tuned.AmountAbsolute.Max = map[string]int64{"USD": int64(th)}
+			c.AmountAbsolute.Max = map[string]int64{"USD": int64(th)}
 		case s.name == "amount_relative":
-			tuned.AmountRelative.MaxMultiple = th
+			c.AmountRelative.MaxMultiple = th
 		case s.name == "geo_distance":
-			tuned.Distance.MaxKm = th
-		case s.window == bestWindow && strings.HasPrefix(s.name, "velocity_count"):
-			tuned.Velocity.MaxCount = int(th)
-		case s.window == bestWindow && strings.HasPrefix(s.name, "velocity_amount"):
-			tuned.Velocity.MaxAmount = map[string]int64{"USD": int64(th)}
+			c.Distance.MaxKm = th
+		case strings.HasPrefix(s.name, "velocity_count"):
+			c.Velocity.MaxCount = int(th)
+		case strings.HasPrefix(s.name, "velocity_amount"):
+			c.Velocity.MaxAmount = map[string]int64{"USD": int64(th)}
 		}
 	}
-	flagged := func(e eval.Example) bool { return tuned.Decide(e.Tx, e.Sigs[bestWindow]).Decision != fraud.Allow }
-	combined := eval.Point{Tune: eval.Score(train, flagged), Test: eval.Score(test, flagged)}
+	score := func(c fraud.Config, xs []eval.Example) eval.Confusion {
+		return eval.Score(xs, func(e eval.Example) bool { return c.Decide(e.Tx, e.Sigs[bestWindow]).Decision != fraud.Allow })
+	}
+	var pool []*ruleSweep
+	for _, s := range sweeps {
+		if s.window < 0 || s.window == bestWindow {
+			pool = append(pool, s)
+		}
+	}
+	tuned := base
+	tuned.Velocity.Window = fraud.Duration{Duration: windows[bestWindow]}
+	type step struct {
+		rule string
+		pt   eval.Point
+	}
+	var steps []step
+	current := 0.0
+	for len(pool) > 0 {
+		bestI, bestCfg, bestPt := -1, tuned, eval.Point{}
+		for i, s := range pool {
+			c := tuned
+			enable(&c, s)
+			if tune := score(c, train); tune.F1() > current && (bestI < 0 || tune.F1() > bestPt.Tune.F1()) {
+				bestI, bestCfg, bestPt = i, c, eval.Point{Tune: tune}
+			}
+		}
+		if bestI < 0 {
+			break
+		}
+		bestPt.Test = score(bestCfg, test)
+		steps = append(steps, step{rule: pool[bestI].name + " > " + pool[bestI].format(pool[bestI].points[pool[bestI].best].Threshold), pt: bestPt})
+		tuned, current = bestCfg, bestPt.Tune.F1()
+		pool = append(pool[:bestI], pool[bestI+1:]...)
+	}
+	var left []string
+	for _, s := range pool {
+		left = append(left, "`"+s.name+"`")
+	}
 
-	fmt.Fprintf(b, "\n### Combined\n\nAll rules at their tuned thresholds, run through `fraud.Config.Decide` with a %s velocity\nwindow (the window whose velocity rules scored best on the tuning split). A transaction is\nflagged if any rule fires.\n\n%s", windows[bestWindow], resultHeader)
-	row(b, "combined (any rule)", "as above", combined)
-	b.WriteString("\nThe combined result can be worse than the best single rule. Each threshold was tuned to\nmaximise its *own* F1, and OR-ing rules adds the false positives of every weak rule. A real\ndeployment would tune the combination jointly, or route weak rules to `review` and keep only\nprecise ones on `block`.\n")
+	fmt.Fprintf(b, "\n### Combined\n\nRules are combined by **greedy forward selection on the tuning split**. Start with no rules; in\neach round, enable the rule (at its tuned threshold) that most improves the combined tuning F1,\nas computed by `fraud.Config.Decide` with a %s velocity window (the window whose velocity\nrules scored best on tuning). Stop when nothing improves it. The test split is only read to\nreport each step.\n\n| Step | Rule enabled | Tune F1 | Test TP | Test FP | Test FN | Test TN | Test precision | Test recall | Test F1 | Test flag rate |\n|---|---|---|---|---|---|---|---|---|---|---|\n", windows[bestWindow])
+	for i, st := range steps {
+		row(b, fmt.Sprint(i+1), st.rule, st.pt)
+	}
+	if len(left) > 0 {
+		fmt.Fprintf(b, "\nLeft disabled (adding any of them lowered the tuning F1): %s.\n", strings.Join(left, ", "))
+	}
+	if len(steps) > 0 {
+		final := steps[len(steps)-1].pt.Test
+		fmt.Fprintf(b, "\n**Final combined detector on the held-out test split: precision %.3f, recall %.3f, F1 %.3f, flagging %.2f%% of transactions.**\n",
+			final.Precision(), final.Recall(), final.F1(), 100*final.FlagRate())
+	}
 
 	b.WriteString("\n### Threshold sweeps\n\nThe chosen row is the best F1 on the tuning split. The test columns show how each choice\ngeneralises.\n")
 	for _, s := range sweeps {
