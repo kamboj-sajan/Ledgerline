@@ -56,7 +56,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 }
 
-func runMigrate(ctx context.Context, args []string, stdout io.Writer) error {
+// runMigrate uses a named result (err) so the deferred Close can report its
+// own failure without hiding an earlier error.
+func runMigrate(ctx context.Context, args []string, stdout io.Writer) (err error) {
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 	dsn := fs.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL connection URL")
 	if err := fs.Parse(args); err != nil {
@@ -74,7 +76,7 @@ func runMigrate(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	defer func() { err = errors.Join(err, m.Close()) }()
 
 	switch action {
 	case "up":

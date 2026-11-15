@@ -168,7 +168,7 @@ func absUint64(a int64) uint64 {
 	if a >= 0 {
 		return uint64(a)
 	}
-	return uint64(-(a + 1)) + 1
+	return uint64(-(a + 1)) + 1 //nolint:gosec // a < 0 here, so -(a+1) is in [0, MaxInt64]
 }
 
 // fromMagnitude is the inverse of absUint64. It reports false if the signed
@@ -179,7 +179,7 @@ func fromMagnitude(mag uint64, negative bool) (int64, bool) {
 	case !negative && mag <= math.MaxInt64:
 		return int64(mag), true
 	case negative && mag < minInt64Magnitude:
-		return -int64(mag), true
+		return -int64(mag), true //nolint:gosec // guarded: mag < 2^63 fits in int64
 	case negative && mag == minInt64Magnitude:
 		return math.MinInt64, true
 	default:

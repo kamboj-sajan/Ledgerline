@@ -25,6 +25,32 @@ journal entries, every POST is idempotent, and webhooks go out through a transac
 
 - Go 1.27+
 - Docker (Compose v2) for Postgres and the integration tests
+- golangci-lint v2 for `make lint`
+
+## Development
+
+```sh
+make test               # unit tests with -race (no Docker)
+make test-integration   # Postgres via testcontainers (needs Docker)
+make lint               # go vet with every build tag + golangci-lint
+make db-up migrate      # local Postgres in Compose, then apply migrations
+docker compose up migrate   # same, entirely inside Docker
+```
+
+`make help` lists every target. Targets for later milestones (`prop-long`, `audit`, `chaos`,
+`load`) exist already but exit with an error saying which milestone they arrive in.
+
+## Layout
+
+| Path | Contents |
+|------|----------|
+| `cmd/ledgerline` | Main binary. Today: `migrate`. Later: `serve`, `dispatch` |
+| `internal/money` | `Money` (int64 minor units plus ISO 4217 currency) with checked arithmetic |
+| `internal/store` | pgx connection pool, embedded goose migrations |
+| `internal/store/storetest` | Disposable Postgres for integration tests (testcontainers) |
+| `migrations/` | SQL migrations, embedded into the binary |
+| `test/integration` | Tests against real Postgres (`integration` build tag) |
+| `docs/go-notes.md` | Go idioms explained for a C++ programmer |
 
 ## Not implemented
 

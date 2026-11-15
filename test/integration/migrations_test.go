@@ -28,7 +28,11 @@ func TestMigrationsUpDownUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer m.Close()
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Errorf("closing migrator: %v", err)
+		}
+	})
 
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {

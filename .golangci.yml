@@ -1,0 +1,45 @@
+version: "2"
+
+run:
+  # Lint the integration and chaos test files too, not just the default build.
+  build-tags:
+    - integration
+    - chaos
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose     # unclosed HTTP response bodies leak connections
+    - errorlint     # compare errors with errors.Is/As, wrap with %w
+    - gosec         # common security mistakes
+    - misspell
+    - noctx         # HTTP requests and SQL calls without a context
+    - nolintlint    # every //nolint must name a linter and give a reason
+    - rowserrcheck  # forgot rows.Err() after iterating
+    - sqlclosecheck # forgot rows.Close()
+    - unconvert
+  settings:
+    errcheck:
+      # Writes of human-readable output to a terminal or an HTTP response
+      # body: a failed write is not actionable and the caller cannot retry it.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    rules:
+      # Tests build SQL and URLs from constants and use fixed fake credentials.
+      - path: _test\.go
+        linters: [gosec]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kamboj-sajan/ledgerline

@@ -132,3 +132,12 @@ The standard `flag` package parses `-name value` flags. A `flag.NewFlagSet` per 
 `sync.Mutex` is `std::mutex`, but it is a value, not a handle (never copy one after first use;
 `go vet` checks this). `atomic.Int64` is `std::atomic<int64_t>`. A zero-value `sync.Mutex` is
 unlocked and ready to use, so it needs no constructor.
+
+## Named results and errors from `defer`
+
+`func runMigrate(...) (err error)` gives the return value a name. A deferred closure can then
+read and change it after the `return` statement has set it:
+`defer func() { err = errors.Join(err, m.Close()) }()`. That way an error from `Close` is
+reported without overwriting an earlier one. A plain `defer m.Close()` would silently throw the
+`Close` error away. In C++, a throwing destructor cannot report anything safely, so this has no
+direct equivalent there.

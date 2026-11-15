@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: go vet (all build tags)
+        run: |
+          go vet ./...
+          go vet -tags=integration,chaos ./...
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0 # keep in step with the version used locally
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: unit tests (race detector)
+        run: go test -race -count=1 ./...
+
+  integration:
+    runs-on: ubuntu-latest # has Docker, which testcontainers needs
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: integration tests against Postgres (race detector)
+        run: go test -race -count=1 -tags=integration ./test/integration/...
