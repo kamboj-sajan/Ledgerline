@@ -57,3 +57,13 @@ jobs:
           go-version-file: go.mod
       - name: concurrency acceptance tests (25 runs each, race detector)
         run: go test -race -count=25 -tags=integration -run 'TestConcurrency' ./test/integration/
+
+  chaos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: crash test (SIGKILL at failpoints and at random, 3 runs)
+        run: go test -tags chaos -count=3 -timeout 30m -run TestChaos -v ./test/chaos/

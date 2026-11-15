@@ -58,11 +58,13 @@ prop-long: ## >=1,000,000 generated operations each for the ledger and the payme
 	LEDGERLINE_PROP_MIN_OPS=1000000 $(GO) test -count=1 -timeout=60m -run 'TestPropPaymentsPure$$' -v ./internal/payments \
 		-args -rapid.checks=$(PROP_CHECKS) -rapid.steps=$(PROP_STEPS)
 
+CHAOS_COUNT ?= 1
+chaos: ## Crash test: serve/dispatch/receiver as child processes, SIGKILLed at failpoints and at random (needs Docker)
+	$(GO) test -tags chaos -count=$(CHAOS_COUNT) -timeout 30m -run TestChaos -v ./test/chaos/ | grep -E '^(=== RUN|--- |\s+chaos_test|ok|FAIL|PASS)'
+
 # The targets below belong to later milestones. Until then they fail loudly
 # instead of passing with nothing to run.
 
-chaos: ## Fault-injection tests with SIGKILL/restart and failpoints (M3)
-	@echo "chaos: not implemented yet (lands in M3, webhooks)" >&2; exit 1
 
 load: ## k6 load test scenarios (M6)
 	@echo "load: not implemented yet (lands in M6, load tests)" >&2; exit 1
